@@ -7,19 +7,13 @@ interface APIResponse {
     };
 }
 
-export async function* getAllFlags(
+export async function* getAllFlagStatuses(
     projectKey: string,
+    environmentKey: string,
     apiKey: string,
-    parameters?: URLSearchParams,
 ): AsyncGenerator<Record<string, unknown>> {
     const baseUrl = "https://app.launchdarkly.com/";
-    let nextUrl : URL | null = new URL(`/api/v2/flags/${projectKey}`, baseUrl);
-    if (parameters) {
-        parameters.forEach((value, key) => {
-            nextUrl!.searchParams.set(key, value);
-        });
-    }
-
+    let nextUrl = `/api/v2/flag-statuses/${projectKey}/${environmentKey}`;
 
     while (nextUrl) {
         const url = new URL(nextUrl, baseUrl);
@@ -58,13 +52,13 @@ export async function* getAllFlags(
 
             const data: APIResponse = await response.json();
 
-            // Yield each flag
-            for (const flag of data.items) {
-                yield flag;
+            // Yield each flag status
+            for (const flagStatus of data.items) {
+                yield flagStatus;
             }
 
             // Get next page URL if it exists
-            nextUrl = data._links?.next?.href ? new URL(data._links.next.href, baseUrl) : null;
+            nextUrl = data._links?.next?.href || "";
         } catch (error) {
             if (error instanceof TypeError && error.message.includes("fetch")) {
                 // Network error, retry after a delay
@@ -89,27 +83,19 @@ if (import.meta.main) {
     const projectKey = Deno.args[0];
     if (!projectKey) {
         console.error("Error: Project key argument is required");
-        console.error("Usage: get-all-flags.ts <project-key> [--<parameter> <value>]");
+        console.error("Usage: get-all-flag-statuses.ts <project-key> <environment-key>");
         Deno.exit(1);
     }
-    // for each of the other arguments like --expand, set a URLSearchParams object
-    const parameters = new URLSearchParams();
-    for (let i = 1; i < Deno.args.length; i++) {
-        if (Deno.args[i].startsWith("--")) {
-            const key = Deno.args[i].slice(2);
-            for (let j = i + 1; j < Deno.args.length; j++) {
-                if (!Deno.args[j].startsWith("--")) {
-                    parameters.append(key, Deno.args[j]);
-                    i = j;
-                } else {
-                    break;
-                }
-            }
-        }
+
+    const environmentKey = Deno.args[1];
+    if (!environmentKey) {
+        console.error("Error: Environment key argument is required");
+        console.error("Usage: get-all-flag-statuses.ts <project-key> <environment-key>");
+        Deno.exit(1);
     }
 
-    for await (const flag of getAllFlags(projectKey, API_KEY, parameters)) {
-        console.log(JSON.stringify(flag, null, 0));
+    for await (const flagStatus of getAllFlagStatuses(projectKey, environmentKey, API_KEY)) {
+        console.log(JSON.stringify(flagStatus, null, 0));
     }
-
 }
+
