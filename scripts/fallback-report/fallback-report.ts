@@ -7,6 +7,7 @@ import { getAllFlagStatuses } from "../get-all-flag-statuses/get-all-flag-status
 interface Flag {
     key: string;
     name?: string;
+    tags: string[];
     defaults?: {
         onVariation?: number;
         offVariation?: number;
@@ -105,6 +106,7 @@ interface Issue {
     fallthrough?: { variation: number; variationValue: unknown; isRollout?: boolean; rolloutVariations?: Array<{ variation: number; variationValue: unknown; weight: number }> };
     offVariation?: { variation: number; variationValue: unknown };
     environmentOn: boolean;
+    tags: string[];
 }
 
 function extractFlagKeyFromHref(href: string): string | null {
@@ -878,6 +880,7 @@ function analyzeFlag(
             fallthrough: fallthroughInfo,
             offVariation: offVariationInfo,
             environmentOn: flagOn,
+            tags: flag.tags,
         };
     }
 
@@ -999,6 +1002,7 @@ function analyzeFlag(
                 fallthrough: fallthroughInfo,
                 offVariation: offVariationInfo,
                 environmentOn: flagOn,
+                tags: flag.tags,
             };
         }
     }
@@ -1077,6 +1081,7 @@ function analyzeFlag(
             fallthrough: fallthroughInfo,
             offVariation: offVariationInfo,
             environmentOn: flagOn,
+            tags: flag.tags,
         };
     }
 
@@ -1099,6 +1104,7 @@ function analyzeFlag(
             fallthrough: fallthroughInfo,
             offVariation: offVariationInfo,
             environmentOn: flagOn,
+            tags: flag.tags,
         };
     }
 
@@ -1146,6 +1152,7 @@ async function generateFallbackReport(
                 reason: "Flag exists but no status information available",
                 fallbackValue: undefined,
                 environmentOn: flag.environments[environmentKey]?.on ?? false,
+                tags: flag.tags,
             });
             continue;
         }
@@ -1286,6 +1293,11 @@ function renderMarkdown(
                 markdown += `\n\n`;
             }
             markdown += `**Environment ON:** ${issue.environmentOn}\n\n`;
+            markdown += `**Tags:**\n`;
+            for (const tag of issue.tags || []) {
+                markdown += `- ${tag}\n`;
+            }
+            markdown += `\n`;
             markdown += `---\n\n`;
         }
     }
@@ -1397,6 +1409,11 @@ function renderMarkdown(
                 }
                 markdown += `\n\n`;
             }
+            markdown += `**Tags:**\n`;
+            for (const tag of issue.tags || []) {
+                markdown += `- ${tag}\n`;
+            }
+            markdown += `\n`;
             markdown += `---\n\n`;
         }
     }
@@ -1502,6 +1519,11 @@ function renderMarkdown(
                 }
                 markdown += `\n\n`;
             }
+            markdown += `**Tags:**\n`;
+            for (const tag of issue.tags || []) {
+                markdown += `- ${tag}\n`;
+            }
+            markdown += `\n`;
             markdown += `---\n\n`;
         }
     }
