@@ -1109,6 +1109,7 @@ async function generateFallbackReport(
     projectKey: string,
     environmentKey: string,
     apiKey: string,
+    filterTags: string[],
 ): Promise<{ issues: Issue[]; flagsMap: Map<string, Flag> }> {
     const issues: Issue[] = [];
     const flagsMap = new Map<string, Flag>();
@@ -1136,6 +1137,12 @@ async function generateFallbackReport(
 
     // Analyze each flag
     for (const [flagKey, flag] of flagsMap) {
+        if (filterTags.length > 0) {
+            if (!flag.tags?.some(tag => filterTags.includes(tag))) {
+                continue;
+            }
+        }
+
         const status = statusesMap.get(flagKey);
         if (!status) {
             // Flag exists but no status - this could be an issue
@@ -1512,8 +1519,8 @@ function renderMarkdown(
 // Main execution
 if (import.meta.main) {
     const flags = parseArgs(Deno.args, {
-        string: ["format"],
-        default: { format: "json" },
+        string: ["format", "filter-tags"],
+        default: { format: "json", "filter-tags": "", },
     });
 
     if (flags.format !== "json" && flags.format !== "markdown") {
@@ -1543,7 +1550,7 @@ if (import.meta.main) {
         Deno.exit(1);
     }
 
-    generateFallbackReport(projectKey, environmentKey, API_KEY)
+    generateFallbackReport(projectKey, environmentKey, API_KEY, flags["filter-tags"].split(","))
         .then(({ issues, flagsMap }) => {
             const reportData = {
                 projectKey,

@@ -26,6 +26,7 @@ Replace `<project-key>` and `<environment-key>` with the actual keys of your Lau
 - `project-key`: The LaunchDarkly project key to analyze
 - `environment-key`: The LaunchDarkly environment key to analyze
 - `--format`: Output format - `json` (default) or `markdown`
+- `--filter-tags`: (Optional) Comma-separated list of tags to filter flags by
 
 ### Environment Variables
 
