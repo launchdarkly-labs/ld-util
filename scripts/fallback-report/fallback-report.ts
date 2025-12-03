@@ -7,6 +7,7 @@ import { getAllFlagStatuses } from "../get-all-flag-statuses/get-all-flag-status
 interface Flag {
     key: string;
     name?: string;
+    tags?: string[];
     defaults?: {
         onVariation?: number;
         offVariation?: number;
@@ -94,6 +95,7 @@ interface VariationServing {
 interface Issue {
     flagKey: string;
     flagName?: string;
+    tags?: string[];
     severity: "critical" | "warning" | "unknown";
     reason: string;
     fallbackValue: unknown;
@@ -865,10 +867,11 @@ function analyzeFlag(
         if (variationServing === undefined || variationServing.length === 0) {
             variationServing = getVariationServing(flag, environmentKey);
         }
-        
+
         return {
             flagKey: flag.key,
             flagName: flag.name,
+            tags: flag.tags,
             severity: "unknown",
             reason: "Fallback value is not reported (no default property in flag status)",
             fallbackValue: fallbackValue,
@@ -985,10 +988,11 @@ function analyzeFlag(
                     recommendedFallbackExplanation = `Flag serves multiple variations, so fallback should match the safe off variation ${getVariationDisplayName(flag, offVariation)} as the safest option.`;
                 }
             }
-            
+
             return {
                 flagKey: flag.key,
                 flagName: flag.name,
+                tags: flag.tags,
                 severity: severity,
                 reason: reason,
                 fallbackValue: fallbackValue,
@@ -1066,6 +1070,7 @@ function analyzeFlag(
         return {
             flagKey: flag.key,
             flagName: flag.name,
+            tags: flag.tags,
             severity: severity,
             reason: reason,
             fallbackValue: fallbackValue,
@@ -1086,10 +1091,11 @@ function analyzeFlag(
         if (variationServing === undefined || variationServing.length === 0) {
             variationServing = getVariationServing(flag, environmentKey);
         }
-        
+
         return {
             flagKey: flag.key,
             flagName: flag.name,
+            tags: flag.tags,
             severity: "warning",
             reason: prerequisiteWarning,
             fallbackValue: fallbackValue,
@@ -1142,6 +1148,7 @@ async function generateFallbackReport(
             issues.push({
                 flagKey: flag.key,
                 flagName: flag.name,
+                tags: flag.tags,
                 severity: "unknown",
                 reason: "Flag exists but no status information available",
                 fallbackValue: undefined,
@@ -1164,6 +1171,7 @@ function renderMarkdown(
     environmentKey: string,
     issues: Issue[],
     flagsMap: Map<string, Flag>,
+    showTags: boolean = false,
 ): string {
     const now = new Date();
     const dateTime = now.toISOString();
@@ -1187,6 +1195,9 @@ function renderMarkdown(
         for (const issue of critical) {
             markdown += `### ${issue.flagName || issue.flagKey}\n\n`;
             markdown += `\`**Key:** ${issue.flagKey}\`\n\n`;
+            if (showTags && issue.tags && issue.tags.length > 0) {
+                markdown += `**Tags:** ${issue.tags.map(tag => `\`${tag}\``).join(", ")}\n\n`;
+            }
             markdown += `**Severity:** ${issue.severity.toUpperCase()}\n\n`;
             markdown += `**Issue:** ${issue.reason}\n\n`;
             markdown += `**Fallback Value:** \`${JSON.stringify(issue.fallbackValue)}\`\n\n`;
@@ -1295,6 +1306,9 @@ function renderMarkdown(
         for (const issue of warning) {
             markdown += `### ${issue.flagName || issue.flagKey}\n\n`;
             markdown += `\`${issue.flagKey}\`\n\n`;
+            if (showTags && issue.tags && issue.tags.length > 0) {
+                markdown += `**Tags:** ${issue.tags.map(tag => `\`${tag}\``).join(", ")}\n\n`;
+            }
             markdown += `**Severity:** ${issue.severity.toUpperCase()}\n\n`;
             markdown += `**Issue:** ${issue.reason}\n\n`;
             markdown += `**Fallback Value:** \`${JSON.stringify(issue.fallbackValue)}\`\n\n`;
@@ -1406,6 +1420,9 @@ function renderMarkdown(
         for (const issue of unknown) {
             markdown += `### ${issue.flagName || issue.flagKey}\n\n`;
             markdown += `\`${issue.flagKey}\`\n\n`;
+            if (showTags && issue.tags && issue.tags.length > 0) {
+                markdown += `**Tags:** ${issue.tags.map(tag => `\`${tag}\``).join(", ")}\n\n`;
+            }
             markdown += `**Reason:** ${issue.reason}\n\n`;
             if (issue.recommendedFallback !== undefined) {
                 markdown += `**Recommended Fallback:** \`${JSON.stringify(issue.recommendedFallback)}\`\n\n`;
@@ -1513,7 +1530,8 @@ function renderMarkdown(
 if (import.meta.main) {
     const flags = parseArgs(Deno.args, {
         string: ["format"],
-        default: { format: "json" },
+        boolean: ["show-tags"],
+        default: { format: "json", "show-tags": false },
     });
 
     if (flags.format !== "json" && flags.format !== "markdown") {
@@ -1532,14 +1550,14 @@ if (import.meta.main) {
     const projectKey = flags._[0] as string | undefined;
     if (!projectKey) {
         console.error("Error: Project key argument is required");
-        console.error("Usage: fallback-report.ts <project-key> <environment-key> [--format json|markdown]");
+        console.error("Usage: fallback-report.ts <project-key> <environment-key> [--format json|markdown] [--show-tags]");
         Deno.exit(1);
     }
 
     const environmentKey = flags._[1] as string | undefined;
     if (!environmentKey) {
         console.error("Error: Environment key argument is required");
-        console.error("Usage: fallback-report.ts <project-key> <environment-key> [--format json|markdown]");
+        console.error("Usage: fallback-report.ts <project-key> <environment-key> [--format json|markdown] [--show-tags]");
         Deno.exit(1);
     }
 
@@ -1558,7 +1576,7 @@ if (import.meta.main) {
             };
 
             if (flags.format === "markdown") {
-                console.log(renderMarkdown(projectKey, environmentKey, issues, flagsMap));
+                console.log(renderMarkdown(projectKey, environmentKey, issues, flagsMap, flags["show-tags"]));
             } else {
                 console.log(JSON.stringify(reportData, null, 2));
             }
