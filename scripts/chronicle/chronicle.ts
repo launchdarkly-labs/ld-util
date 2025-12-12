@@ -84,6 +84,20 @@ interface ChronicleStats {
         fastestFlag: string;
         totalRollbacks: number;
     } | null;
+    progressiveRolloutSimulator: {
+        flagKey: string;
+        changeCount: number;
+    } | null;
+    experimentSimulator: {
+        flagKey: string;
+        changeCount: number;
+    } | null;
+    longestLivedFlag: {
+        flagKey: string;
+        daysAlive: number;
+        createdDate: number;
+        archivedDate: number;
+    } | null;
     insights: {
         longestStreak: number;
         weekendWarrior: boolean;
@@ -334,6 +348,9 @@ function calculateUserStats(
         },
         remediation: null,
         oops: null,
+        progressiveRolloutSimulator: null,
+        experimentSimulator: null,
+        longestLivedFlag: null,
         insights: {
             longestStreak: 0,
             weekendWarrior: false,
@@ -354,6 +371,16 @@ function calculateUserStats(
 
     // Track flag on/off events for remediation
     const flagEvents: Map<string, Array<{ date: number; action: string; titleVerb: string }>> = new Map();
+    
+    // Track percentage/rollout changes for manual progressive rollout detection
+    const percentageChanges = new Map<string, number>();
+    
+    // Track variation rollout changes for experiment simulation detection
+    const variationRolloutChanges = new Map<string, number>();
+    
+    // Track flag creation and archival dates for longest-lived flag
+    const flagCreationDates = new Map<string, number>();
+    const flagArchivalDates = new Map<string, number>();
 
     const monthNames = [
         "January",
@@ -384,14 +411,26 @@ function calculateUserStats(
         if (entry.kind === "flag") {
             if (actions.some((a) => a.includes("createFlag"))) {
                 stats.flagsCreated++;
+                // Track flag creation date
+                if (entry.name) {
+                    if (!flagCreationDates.has(entry.name) || entry.date < flagCreationDates.get(entry.name)!) {
+                        flagCreationDates.set(entry.name, entry.date);
+                    }
+                }
             }
 
             if (
                 actions.some((a) =>
-                    a.includes("archiveFlag") || a.includes("deleteFlag")
+                    a.includes("updateGlobalArchived") || a.includes("deleteFlag")
                 )
             ) {
                 stats.flagsArchived++;
+                // Track flag archival date
+                if (entry.name) {
+                    if (!flagArchivalDates.has(entry.name) || entry.date > flagArchivalDates.get(entry.name)!) {
+                        flagArchivalDates.set(entry.name, entry.date);
+                    }
+                }
             }
 
             if (
@@ -413,6 +452,27 @@ function calculateUserStats(
                     action: "updateOn",
                     titleVerb: entry.titleVerb,
                 });
+            }
+            
+            // Track manual percentage/rollout changes (progressive rollout simulation)
+            if (
+                entry.name &&
+                (actions.some((a) => a === "updateFallthrough") ||
+                 actions.some((a) => a === "updateRules")) &&
+                entry.description &&
+                /Set .* rollout to `\d+%`/.test(entry.description)
+            ) {
+                const flagKey = entry.name;
+                percentageChanges.set(flagKey, (percentageChanges.get(flagKey) || 0) + 1);
+            }
+            
+            // Track variation rollout changes (experiment simulation)
+            if (
+                entry.name &&
+                actions.some((a) => a.includes("updateFlagVariations"))
+            ) {
+                const flagKey = entry.name;
+                variationRolloutChanges.set(flagKey, (variationRolloutChanges.get(flagKey) || 0) + 1);
             }
         }
 
@@ -511,6 +571,38 @@ function calculateUserStats(
 
     // Calculate oops stats (on → off)
     stats.oops = calculateOops(flagEvents);
+    
+    // Find flags with most manual percentage changes (progressive rollout simulation)
+    let mostPercentageChanges: { flagKey: string; changeCount: number } | null = null;
+    for (const [flagKey, count] of percentageChanges.entries()) {
+        if (count >= 5 && (!mostPercentageChanges || count > mostPercentageChanges.changeCount)) {
+            mostPercentageChanges = { flagKey, changeCount: count };
+        }
+    }
+    stats.progressiveRolloutSimulator = mostPercentageChanges;
+    
+    // Find flags with most variation rollout changes (experiment simulation)
+    let mostVariationChanges: { flagKey: string; changeCount: number } | null = null;
+    for (const [flagKey, count] of variationRolloutChanges.entries()) {
+        if (count >= 5 && (!mostVariationChanges || count > mostVariationChanges.changeCount)) {
+            mostVariationChanges = { flagKey, changeCount: count };
+        }
+    }
+    stats.experimentSimulator = mostVariationChanges;
+    
+    // Find longest-lived flag (created and archived by this user)
+    let longestLived: { flagKey: string; daysAlive: number; createdDate: number; archivedDate: number } | null = null;
+    for (const [flagKey, createdDate] of flagCreationDates.entries()) {
+        const archivedDate = flagArchivalDates.get(flagKey);
+        if (archivedDate) {
+            const daysAlive = Math.floor((archivedDate - createdDate) / (1000 * 60 * 60 * 24));
+            // Only track flags that lived for at least 30 days
+            if (daysAlive >= 30 && (!longestLived || daysAlive > longestLived.daysAlive)) {
+                longestLived = { flagKey, daysAlive, createdDate, archivedDate };
+            }
+        }
+    }
+    stats.longestLivedFlag = longestLived;
 
     // Calculate insights
     stats.insights.longestStreak = calculateLongestStreak(dateSet);
@@ -872,7 +964,7 @@ function calculateAchievements(
                 }
             }
 
-            if (actions.some((a) => a.includes("archiveFlag") || a.includes("deleteFlag"))) {
+            if (actions.some((a) => a.includes("updateGlobalArchived") || a.includes("deleteFlag"))) {
                 stats.flagsArchived++;
             }
 
@@ -940,13 +1032,45 @@ function calculateAchievements(
         }
     }
 
-    // Oops! - Fastest rollback
+    // Oops! - Fastest rollback (Also a good pitch for Guardian!)
     if (userStats.oops && userStats.oops.fastestSeconds < 300) {
         achievements.push({
             name: "😅 Oops!",
             description: `Quick rollback: Turned off "${userStats.oops.fastestFlag}" ${userStats.oops.fastestSeconds}s after turning it on`,
             earned: true,
             value: `${userStats.oops.fastestSeconds}s`,
+        });
+    }
+    
+    // Manual Roller - This should have been a progressive release
+    if (userStats.progressiveRolloutSimulator && userStats.progressiveRolloutSimulator.changeCount >= 5) {
+        achievements.push({
+            name: "🎢 Manual Roller",
+            description: `Changed rollout percentages ${userStats.progressiveRolloutSimulator.changeCount} times on "${userStats.progressiveRolloutSimulator.flagKey}" - Consider using progressive or guarded rollouts!`,
+            earned: true,
+            value: userStats.progressiveRolloutSimulator.changeCount,
+        });
+    }
+    
+    // DIY Experimenter - This should have been an experiment
+    if (userStats.experimentSimulator && userStats.experimentSimulator.changeCount >= 5) {
+        achievements.push({
+            name: "🧪 DIY Experimenter",
+            description: `Manually adjusted variations ${userStats.experimentSimulator.changeCount} times on "${userStats.experimentSimulator.flagKey}" - try LaunchDarkly Experimentation!`,
+            earned: true,
+            value: userStats.experimentSimulator.changeCount,
+        });
+    }
+    
+    // Time Capsule - Longest-lived flag (gently reminds to clean up)
+    if (userStats.longestLivedFlag && userStats.longestLivedFlag.daysAlive >= 30) {
+        const createdDate = new Date(userStats.longestLivedFlag.createdDate).toLocaleDateString();
+        const archivedDate = new Date(userStats.longestLivedFlag.archivedDate).toLocaleDateString();
+        achievements.push({
+            name: "🕰️ Time Capsule",
+            description: `Kept "${userStats.longestLivedFlag.flagKey}" around for ${userStats.longestLivedFlag.daysAlive} days (${createdDate} - ${archivedDate}) - remember to clean up old flags!`,
+            earned: true,
+            value: `${userStats.longestLivedFlag.daysAlive} days`,
         });
     }
 
