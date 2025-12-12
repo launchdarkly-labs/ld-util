@@ -535,6 +535,7 @@ if (import.meta.main) {
     let inputFile: string | undefined;
     let outputFile: string | undefined; // undefined = stdout
     let year: number | undefined;
+    let parallelChunks = 10; // Default to 10 parallel requests
 
     for (let i = 0; i < Deno.args.length; i++) {
         const arg = Deno.args[i];
@@ -547,6 +548,13 @@ if (import.meta.main) {
         } else if (arg === "--year") {
             year = parseInt(Deno.args[i + 1]);
             i++;
+        } else if (arg === "--parallel") {
+            parallelChunks = parseInt(Deno.args[i + 1]);
+            if (isNaN(parallelChunks) || parallelChunks < 1) {
+                console.error("Error: --parallel must be a positive integer");
+                Deno.exit(1);
+            }
+            i++;
         } else if (arg === "--help" || arg === "-h") {
             console.log(`Chronicle HTML - Generate a Spotify Wrapped-style HTML report
 
@@ -558,6 +566,7 @@ Options:
   --output <file>, -o   Output HTML file (default: stdout)
                         Use '-' for stdout
   --year <year>         Year for report (default: current year)
+  --parallel <num>      Number of parallel requests (default: 10)
   --help, -h            Show this help message
 
 Examples:
@@ -570,8 +579,8 @@ Examples:
   # Pipe through other tools
   html.ts | gzip > wrapped.html.gz
 
-  # Read from file, write to file
-  html.ts --input audit-log.json --output my-wrapped.html
+  # Read from file, write to file with 5 parallel requests
+  html.ts --input audit-log.json --output my-wrapped.html --parallel 5
 
   # Output to stdout explicitly
   html.ts --output - > wrapped.html
@@ -582,7 +591,7 @@ Examples:
 
     try {
         console.error("Generating Chronicle report...");
-        const report = await generateChronicleReport(API_KEY, inputFile, year);
+        const report = await generateChronicleReport(API_KEY, inputFile, year, parallelChunks);
 
         console.error("Creating HTML...");
         const html = generateHTML(report);

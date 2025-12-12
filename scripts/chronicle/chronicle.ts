@@ -1,6 +1,6 @@
 #!/usr/bin/env -S deno run --allow-net --allow-env --allow-read
 
-import { getAllAuditLogEntries } from "../get-all-audit-log-entries/get-all-audit-log-entries.ts";
+import { getAllAuditLogEntriesParallel } from "../get-all-audit-log-entries/get-all-audit-log-entries.ts";
 
 // ============================================================================
 // Type Definitions
@@ -256,6 +256,7 @@ async function* readAuditLogFromFile(
 async function* fetchAuditLogFromAPI(
     apiKey: string,
     year: number,
+    parallelChunks = 10,
 ): AsyncGenerator<AuditLogEntry> {
     // Calculate start of year (Jan 1 00:00:00 UTC)
     const startOfYear = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0)).getTime();
@@ -264,9 +265,22 @@ async function* fetchAuditLogFromAPI(
         .getTime();
 
     for await (
-        const entry of getAllAuditLogEntries(apiKey, {
+        const entry of getAllAuditLogEntriesParallel(apiKey, {
             after: startOfYear,
             before: endOfYear,
+            parallelChunks,
+            onProgress: (progress) => {
+                // Log progress to stderr so it doesn't interfere with JSON output
+                if (progress.type === "fetching" || progress.type === "chunk_complete") {
+                    console.error(
+                        `[${progress.percentage}%] Retrieved ${progress.totalEntriesFetched?.toLocaleString()} entries...`,
+                    );
+                } else if (progress.type === "complete") {
+                    console.error(
+                        `[100%] Complete: ${progress.uniqueEntries?.toLocaleString()} entries retrieved`,
+                    );
+                }
+            },
         })
     ) {
         yield entry as AuditLogEntry;
@@ -1375,6 +1389,7 @@ export async function generateChronicleReport(
     apiKey: string,
     inputFile?: string,
     year?: number,
+    parallelChunks = 10,
 ): Promise<ChronicleReport> {
     // Get caller identity
     console.error("Fetching caller identity...");
@@ -1400,7 +1415,7 @@ export async function generateChronicleReport(
 
     const entrySource = inputFile
         ? readAuditLogFromFile(inputFile)
-        : fetchAuditLogFromAPI(apiKey, targetYear);
+        : fetchAuditLogFromAPI(apiKey, targetYear, parallelChunks);
 
     for await (const entry of entrySource) {
         allEntries.push(entry);
@@ -1420,6 +1435,11 @@ export async function generateChronicleReport(
             });
         }
     }
+
+    // Sort entries by date (oldest first) since parallel fetching can return them out of order
+    console.error("Sorting entries by date...");
+    allEntries.sort((a, b) => a.date - b.date);
+    userEntries.sort((a, b) => a.date - b.date);
 
     console.error(
         `Loaded ${allEntries.length} total entries, ${userEntries.length} by user`,
@@ -1493,6 +1513,7 @@ if (import.meta.main) {
     // Parse command line arguments
     let inputFile: string | undefined;
     let year: number | undefined;
+    let parallelChunks = 10; // Default to 10 parallel requests
 
     for (let i = 0; i < Deno.args.length; i++) {
         const arg = Deno.args[i];
@@ -1515,6 +1536,18 @@ if (import.meta.main) {
                 Deno.exit(1);
             }
             i++;
+        } else if (arg === "--parallel") {
+            const parallelStr = Deno.args[i + 1];
+            if (!parallelStr) {
+                console.error("Error: --parallel requires a number");
+                Deno.exit(1);
+            }
+            parallelChunks = parseInt(parallelStr);
+            if (isNaN(parallelChunks) || parallelChunks < 1) {
+                console.error(`Error: --parallel must be a positive integer`);
+                Deno.exit(1);
+            }
+            i++;
         } else if (arg === "--help" || arg === "-h") {
             console.log(`Chronicle - Generate a Spotify Wrapped-style report for LaunchDarkly
 
@@ -1522,9 +1555,10 @@ Usage:
   chronicle.ts [options]
 
 Options:
-  --input <file>    Read audit log from JSONL file instead of API
-  --year <year>     Specify year for report (default: current year)
-  --help, -h        Show this help message
+  --input <file>      Read audit log from JSONL file instead of API
+  --year <year>       Specify year for report (default: current year)
+  --parallel <num>    Number of parallel requests (default: 10)
+  --help, -h          Show this help message
 
 Environment Variables:
   LAUNCHDARKLY_API_KEY or LD_API_KEY - Your LaunchDarkly API key (required)
@@ -1536,15 +1570,15 @@ Examples:
   # Generate report from file
   chronicle.ts --input audit-log.json
 
-  # Generate report for specific year
-  chronicle.ts --year 2024
+  # Generate report for specific year with 5 parallel requests
+  chronicle.ts --year 2024 --parallel 5
 `);
             Deno.exit(0);
         }
     }
 
     try {
-        const report = await generateChronicleReport(API_KEY, inputFile, year);
+        const report = await generateChronicleReport(API_KEY, inputFile, year, parallelChunks);
         console.log(JSON.stringify(report, null, 2));
     } catch (error) {
         console.error(`Error: ${error.message}`);

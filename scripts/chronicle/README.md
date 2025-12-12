@@ -9,6 +9,7 @@ Generate a Spotify Wrapped-style yearly report from LaunchDarkly audit logs. Chr
 - **Comparative Rankings**: See how you stack up against other team members
 - **Dual Input Modes**: Fetch from API or read from local JSONL file
 - **Automatic Identity Detection**: Uses caller identity API to determine current user
+- **Fast Parallel Fetching**: Configurable parallel requests for faster API downloads (default: 10)
 
 ## Usage
 
@@ -20,6 +21,7 @@ deno run --allow-net --allow-env --allow-read chronicle.ts [options]
 
 - `--input <file>`: Read audit log from JSONL file instead of fetching from API
 - `--year <year>`: Specify year for report (default: current year)
+- `--parallel <num>`: Number of parallel requests for API fetching (default: 10)
 - `--help, -h`: Show help message
 
 ### Environment Variables
@@ -44,6 +46,16 @@ LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read chron
 
 ```bash
 LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read chronicle.ts --year 2024
+```
+
+### Use Custom Parallel Requests
+
+```bash
+# Faster for large datasets
+LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read chronicle.ts --parallel 15
+
+# Slower, more conservative
+LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read chronicle.ts --parallel 5
 ```
 
 ### Save Report to File
@@ -206,8 +218,15 @@ LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read \
 ### Performance
 
 - **API Mode**: Fetches only the data you need for the specified year
+  - Uses parallel fetching by default (10 concurrent requests)
+  - Progress updates show real-time entry counts
+  - Typical year-long fetch: 30-60 seconds with 10 parallel requests
 - **File Mode**: Faster for repeated analysis, but requires pre-fetching audit logs
 - Large audit logs are processed in a streaming fashion to minimize memory usage
+- Adjust `--parallel` based on your needs:
+  - Higher (15-20): Faster but more API load
+  - Lower (5): More conservative, better for rate limits
+  - Default (10): Good balance for most use cases
 
 ## Troubleshooting
 
