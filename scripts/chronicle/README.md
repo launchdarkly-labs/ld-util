@@ -139,11 +139,11 @@ The script outputs a JSON report with the following structure:
   - **month**: Most active month name and count
   - **day**: Most active single day and count
   - **hour**: Most active hour (0-23 UTC) and count
-- **remediation**: Flag incident remediation stats (null if no incidents)
+- **remediation**: Flag toggle tracking (null if no toggles)
   - **fastestSeconds**: Fastest time to turn a flag back on after turning it off
-  - **fastestFlag**: Name of the flag with fastest remediation
-  - **totalIncidents**: Number of times you turned flags off then back on
-  - **averageSeconds**: Average time to remediate
+  - **fastestFlag**: Name of the flag with fastest recovery
+  - **totalToggles**: Number of times you turned flags off then back on
+  - **averageSeconds**: Average time flags were off
 - **insights**: Interesting patterns about your work style
   - **longestStreak**: Longest consecutive days with activity
   - **weekendWarrior**: Whether you work on weekends frequently (>50 actions)

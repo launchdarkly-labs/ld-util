@@ -76,7 +76,7 @@ interface ChronicleStats {
     remediation: {
         fastestSeconds: number;
         fastestFlag: string;
-        totalIncidents: number;
+        totalToggles: number;
         averageSeconds: number;
     } | null;
     oops: {
@@ -138,7 +138,7 @@ interface ApprovalSpeed {
     totalApprovals: number;
 }
 
-interface ChronicleReport {
+export interface ChronicleReport {
     user: {
         memberId: string;
         email: string;
@@ -571,10 +571,10 @@ function calculateRemediation(
 ): {
     fastestSeconds: number;
     fastestFlag: string;
-    totalIncidents: number;
+    totalToggles: number;
     averageSeconds: number;
 } | null {
-    const remediations: Array<{ flagKey: string; seconds: number }> = [];
+    const toggles: Array<{ flagKey: string; seconds: number }> = [];
 
     for (const [flagKey, events] of flagEvents.entries()) {
         // Sort events by date
@@ -584,34 +584,34 @@ function calculateRemediation(
             const current = events[i];
             const next = events[i + 1];
 
-            // Check if this is a "turned off" followed by "turned on" (remediation)
+            // Check if this is a "turned off" followed by "turned on"
             if (
                 current.titleVerb.startsWith("turned off") &&
                 next.titleVerb.startsWith("turned on")
             ) {
                 const seconds = (next.date - current.date) / 1000;
-                remediations.push({ flagKey, seconds });
+                toggles.push({ flagKey, seconds });
             }
         }
     }
 
-    if (remediations.length === 0) {
+    if (toggles.length === 0) {
         return null;
     }
 
     // Find fastest
-    const fastest = remediations.reduce((min, curr) =>
+    const fastest = toggles.reduce((min, curr) =>
         curr.seconds < min.seconds ? curr : min
     );
 
     // Calculate average
-    const totalSeconds = remediations.reduce((sum, r) => sum + r.seconds, 0);
-    const averageSeconds = totalSeconds / remediations.length;
+    const totalSeconds = toggles.reduce((sum, r) => sum + r.seconds, 0);
+    const averageSeconds = totalSeconds / toggles.length;
 
     return {
         fastestSeconds: Math.round(fastest.seconds),
         fastestFlag: fastest.flagKey,
-        totalIncidents: remediations.length,
+        totalToggles: toggles.length,
         averageSeconds: Math.round(averageSeconds),
     };
 }
@@ -912,14 +912,14 @@ function calculateAchievements(
         });
     }
 
-    // Lightning Fast - Fastest remediation
+    // Lightning Fast - Fastest recovery
     if (userStats.remediation && userStats.remediation.fastestSeconds < 60) {
         const allRemediations: number[] = [];
         // Would need to calculate this for all users, but for now check if user is fast
         if (userStats.remediation.fastestSeconds < 10) {
             achievements.push({
                 name: "⚡ Lightning Fast",
-                description: `Fastest flag remediation: ${userStats.remediation.fastestSeconds}s on "${userStats.remediation.fastestFlag}"`,
+                description: `Quickest flag recovery: ${userStats.remediation.fastestSeconds}s on "${userStats.remediation.fastestFlag}"`,
                 earned: true,
                 value: `${userStats.remediation.fastestSeconds}s`,
             });
@@ -1237,22 +1237,14 @@ function calculateAchievements(
         });
     }
 
-    // Firefighter - Most remediations
-    if (userStats.remediation && userStats.remediation.totalIncidents >= 20) {
-        const sortedByRemediations = Array.from(memberStats.entries())
-            .map(([id, stats]) => ({ id, count: stats.remediationCount }))
-            .sort((a, b) => b.count - a.count);
-        const remediationRank = sortedByRemediations.findIndex(x => x.id === userId) + 1;
-
-        if (remediationRank === 1) {
-            achievements.push({
-                name: "🔥 Firefighter",
-                description: `Handled the most incidents (${userStats.remediation.totalIncidents} remediations)`,
-                earned: true,
-                rank: 1,
-                value: userStats.remediation.totalIncidents,
-            });
-        }
+    // Quick Recovery - Many flag recoveries
+    if (userStats.remediation && userStats.remediation.totalToggles >= 20) {
+        achievements.push({
+            name: "🔄 Quick Recovery",
+            description: `Toggled ${userStats.remediation.totalToggles} flags off and back on`,
+            earned: true,
+            value: userStats.remediation.totalToggles,
+        });
     }
 
     // By the Book vs High Roller
@@ -1379,7 +1371,7 @@ function calculateRankings(
 // Main Function
 // ============================================================================
 
-async function generateChronicleReport(
+export async function generateChronicleReport(
     apiKey: string,
     inputFile?: string,
     year?: number,
