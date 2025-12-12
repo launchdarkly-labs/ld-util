@@ -265,7 +265,7 @@ function generateHTML(report: ChronicleReport): string {
     <div class="container">
         <!-- Title Slide -->
         <div class="slide">
-            <h1>🎊 Chronicle Wrapped ${report.year}</h1>
+            <h1>🎊 LaunchDarkly Chronicle ${report.year}</h1>
             <h3>${user.firstName} ${user.lastName}</h3>
             <p>${user.email}</p>
         </div>
