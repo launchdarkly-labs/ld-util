@@ -84,6 +84,14 @@ interface ChronicleStats {
         fastestFlag: string;
         totalRollbacks: number;
     } | null;
+    progressiveRolloutSimulator: {
+        flagKey: string;
+        changeCount: number;
+    } | null;
+    experimentSimulator: {
+        flagKey: string;
+        changeCount: number;
+    } | null;
     insights: {
         longestStreak: number;
         weekendWarrior: boolean;
@@ -320,6 +328,8 @@ function calculateUserStats(
         },
         remediation: null,
         oops: null,
+        progressiveRolloutSimulator: null,
+        experimentSimulator: null,
         insights: {
             longestStreak: 0,
             weekendWarrior: false,
@@ -340,6 +350,12 @@ function calculateUserStats(
 
     // Track flag on/off events for remediation
     const flagEvents: Map<string, Array<{ date: number; action: string; titleVerb: string }>> = new Map();
+    
+    // Track percentage/rollout changes for manual progressive rollout detection
+    const percentageChanges = new Map<string, number>();
+    
+    // Track variation rollout changes for experiment simulation detection
+    const variationRolloutChanges = new Map<string, number>();
 
     const monthNames = [
         "January",
@@ -399,6 +415,25 @@ function calculateUserStats(
                     action: "updateOn",
                     titleVerb: entry.titleVerb,
                 });
+            }
+            
+            // Track manual percentage/rollout changes (progressive rollout simulation)
+            if (
+                entry.name &&
+                (actions.some((a) => a.includes("updateFallthroughVariationOrRollout")) ||
+                 actions.some((a) => a.includes("updateRollout")))
+            ) {
+                const flagKey = entry.name;
+                percentageChanges.set(flagKey, (percentageChanges.get(flagKey) || 0) + 1);
+            }
+            
+            // Track variation rollout changes (experiment simulation)
+            if (
+                entry.name &&
+                actions.some((a) => a.includes("updateVariation"))
+            ) {
+                const flagKey = entry.name;
+                variationRolloutChanges.set(flagKey, (variationRolloutChanges.get(flagKey) || 0) + 1);
             }
         }
 
@@ -497,6 +532,24 @@ function calculateUserStats(
 
     // Calculate oops stats (on → off)
     stats.oops = calculateOops(flagEvents);
+    
+    // Find flags with most manual percentage changes (progressive rollout simulation)
+    let mostPercentageChanges: { flagKey: string; changeCount: number } | null = null;
+    for (const [flagKey, count] of percentageChanges.entries()) {
+        if (count >= 5 && (!mostPercentageChanges || count > mostPercentageChanges.changeCount)) {
+            mostPercentageChanges = { flagKey, changeCount: count };
+        }
+    }
+    stats.progressiveRolloutSimulator = mostPercentageChanges;
+    
+    // Find flags with most variation rollout changes (experiment simulation)
+    let mostVariationChanges: { flagKey: string; changeCount: number } | null = null;
+    for (const [flagKey, count] of variationRolloutChanges.entries()) {
+        if (count >= 5 && (!mostVariationChanges || count > mostVariationChanges.changeCount)) {
+            mostVariationChanges = { flagKey, changeCount: count };
+        }
+    }
+    stats.experimentSimulator = mostVariationChanges;
 
     // Calculate insights
     stats.insights.longestStreak = calculateLongestStreak(dateSet);
@@ -926,13 +979,33 @@ function calculateAchievements(
         }
     }
 
-    // Oops! - Fastest rollback
+    // Oops! - Fastest rollback (Also a good pitch for Guardian!)
     if (userStats.oops && userStats.oops.fastestSeconds < 300) {
         achievements.push({
             name: "😅 Oops!",
             description: `Quick rollback: Turned off "${userStats.oops.fastestFlag}" ${userStats.oops.fastestSeconds}s after turning it on`,
             earned: true,
             value: `${userStats.oops.fastestSeconds}s`,
+        });
+    }
+    
+    // Manual Roller - This should have been a progressive release
+    if (userStats.progressiveRolloutSimulator && userStats.progressiveRolloutSimulator.changeCount >= 5) {
+        achievements.push({
+            name: "🎢 Manual Roller",
+            description: `Changed rollout percentages ${userStats.progressiveRolloutSimulator.changeCount} times on "${userStats.progressiveRolloutSimulator.flagKey}" - consider using progressive delivery!`,
+            earned: true,
+            value: userStats.progressiveRolloutSimulator.changeCount,
+        });
+    }
+    
+    // DIY Experimenter - This should have been an experiment
+    if (userStats.experimentSimulator && userStats.experimentSimulator.changeCount >= 5) {
+        achievements.push({
+            name: "🧪 DIY Experimenter",
+            description: `Manually adjusted variations ${userStats.experimentSimulator.changeCount} times on "${userStats.experimentSimulator.flagKey}" - try LaunchDarkly Experimentation!`,
+            earned: true,
+            value: userStats.experimentSimulator.changeCount,
         });
     }
 

@@ -385,11 +385,18 @@ function generateHTML(report: ChronicleReport): string {
                 ${achievements.map(a => {
                     const emoji = a.name.split(' ')[0];
                     const name = a.name.substring(emoji.length + 1);
+                    
+                    // Add special handling for Oops! achievement to mention Guardian
+                    let description = a.description;
+                    if (name === "Oops!") {
+                        description += " (Guardian can help prevent these!)";
+                    }
+                    
                     return `
                         <div class="achievement-card">
                             <div class="emoji">${emoji}</div>
                             <div class="name">${name}</div>
-                            <div class="description">${a.description}</div>
+                            <div class="description">${description}</div>
                         </div>
                     `;
                 }).join('')}
