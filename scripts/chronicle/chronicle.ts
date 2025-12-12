@@ -92,6 +92,12 @@ interface ChronicleStats {
         flagKey: string;
         changeCount: number;
     } | null;
+    longestLivedFlag: {
+        flagKey: string;
+        daysAlive: number;
+        createdDate: number;
+        archivedDate: number;
+    } | null;
     insights: {
         longestStreak: number;
         weekendWarrior: boolean;
@@ -330,6 +336,7 @@ function calculateUserStats(
         oops: null,
         progressiveRolloutSimulator: null,
         experimentSimulator: null,
+        longestLivedFlag: null,
         insights: {
             longestStreak: 0,
             weekendWarrior: false,
@@ -356,6 +363,10 @@ function calculateUserStats(
     
     // Track variation rollout changes for experiment simulation detection
     const variationRolloutChanges = new Map<string, number>();
+    
+    // Track flag creation and archival dates for longest-lived flag
+    const flagCreationDates = new Map<string, number>();
+    const flagArchivalDates = new Map<string, number>();
 
     const monthNames = [
         "January",
@@ -386,6 +397,12 @@ function calculateUserStats(
         if (entry.kind === "flag") {
             if (actions.some((a) => a.includes("createFlag"))) {
                 stats.flagsCreated++;
+                // Track flag creation date
+                if (entry.name) {
+                    if (!flagCreationDates.has(entry.name) || entry.date < flagCreationDates.get(entry.name)!) {
+                        flagCreationDates.set(entry.name, entry.date);
+                    }
+                }
             }
 
             if (
@@ -394,6 +411,12 @@ function calculateUserStats(
                 )
             ) {
                 stats.flagsArchived++;
+                // Track flag archival date
+                if (entry.name) {
+                    if (!flagArchivalDates.has(entry.name) || entry.date > flagArchivalDates.get(entry.name)!) {
+                        flagArchivalDates.set(entry.name, entry.date);
+                    }
+                }
             }
 
             if (
@@ -550,6 +573,20 @@ function calculateUserStats(
         }
     }
     stats.experimentSimulator = mostVariationChanges;
+    
+    // Find longest-lived flag (created and archived by this user)
+    let longestLived: { flagKey: string; daysAlive: number; createdDate: number; archivedDate: number } | null = null;
+    for (const [flagKey, createdDate] of flagCreationDates.entries()) {
+        const archivedDate = flagArchivalDates.get(flagKey);
+        if (archivedDate) {
+            const daysAlive = Math.floor((archivedDate - createdDate) / (1000 * 60 * 60 * 24));
+            // Only track flags that lived for at least 30 days
+            if (daysAlive >= 30 && (!longestLived || daysAlive > longestLived.daysAlive)) {
+                longestLived = { flagKey, daysAlive, createdDate, archivedDate };
+            }
+        }
+    }
+    stats.longestLivedFlag = longestLived;
 
     // Calculate insights
     stats.insights.longestStreak = calculateLongestStreak(dateSet);
@@ -1006,6 +1043,18 @@ function calculateAchievements(
             description: `Manually adjusted variations ${userStats.experimentSimulator.changeCount} times on "${userStats.experimentSimulator.flagKey}" - try LaunchDarkly Experimentation!`,
             earned: true,
             value: userStats.experimentSimulator.changeCount,
+        });
+    }
+    
+    // Time Capsule - Longest-lived flag (gently reminds to clean up)
+    if (userStats.longestLivedFlag && userStats.longestLivedFlag.daysAlive >= 30) {
+        const createdDate = new Date(userStats.longestLivedFlag.createdDate).toLocaleDateString();
+        const archivedDate = new Date(userStats.longestLivedFlag.archivedDate).toLocaleDateString();
+        achievements.push({
+            name: "🕰️ Time Capsule",
+            description: `Kept "${userStats.longestLivedFlag.flagKey}" around for ${userStats.longestLivedFlag.daysAlive} days (${createdDate} - ${archivedDate}) - remember to clean up old flags!`,
+            earned: true,
+            value: `${userStats.longestLivedFlag.daysAlive} days`,
         });
     }
 
