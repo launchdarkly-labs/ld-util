@@ -22,7 +22,8 @@ deno run --allow-net --allow-env --allow-read --allow-write html.ts [options]
 ### Options
 
 - `--input <file>`: Read audit log from JSONL file
-- `--output <file>`: Output HTML filename (default: `chronicle-wrapped.html`)
+- `--output <file>, -o`: Output HTML filename (default: **stdout**)
+  - Use `-` for explicit stdout
 - `--year <year>`: Specify year for report (default: current year)
 - `--help, -h`: Show help message
 
@@ -32,15 +33,31 @@ deno run --allow-net --allow-env --allow-read --allow-write html.ts [options]
 
 ## Examples
 
-### Generate from API (Current Year)
+### Generate to stdout (Default)
 
 ```bash
-LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --allow-write html.ts
+# Redirect to file
+LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --allow-write html.ts > wrapped.html
+
+# Pipe through gzip
+LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --allow-write html.ts | gzip > wrapped.html.gz
+
+# View in browser directly (macOS)
+LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --allow-write html.ts > /tmp/wrapped.html && open /tmp/wrapped.html
 ```
 
-This creates `chronicle-wrapped.html` in the current directory.
+### Generate to a File
 
-### Generate from File
+```bash
+LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --allow-write html.ts \
+  --output my-wrapped.html
+
+# Or use short flag
+LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --allow-write html.ts \
+  -o my-wrapped.html
+```
+
+### Read from File, Write to File
 
 ```bash
 LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --allow-write html.ts \
@@ -52,8 +69,7 @@ LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --all
 
 ```bash
 LAUNCHDARKLY_API_KEY=api-123 deno run --allow-net --allow-env --allow-read --allow-write html.ts \
-  --year 2024 \
-  --output 2024-wrapped.html
+  --year 2024 > 2024-wrapped.html
 ```
 
 ## Viewing the Report

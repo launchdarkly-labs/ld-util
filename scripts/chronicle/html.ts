@@ -26,7 +26,7 @@ function generateHTML(report: ChronicleReport): string {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>${user.firstName}'s ${report.year} Chronicle Wrapped</title>
+    <title>${user.firstName}'s ${report.year} LaunchDarkly Chronicle</title>
     <style>
         * {
             margin: 0;
@@ -448,29 +448,72 @@ function generateHTML(report: ChronicleReport): string {
     </div>
 
     <script>
-        // Smooth scroll behavior
+        // Debounced scroll handling to prevent accidental skips
+        let isScrolling = false;
+        let scrollTimeout;
+
         document.addEventListener('wheel', (e) => {
-            e.preventDefault();
-            const delta = Math.sign(e.deltaY);
-            const slides = document.querySelectorAll('.slide');
-            const currentSlide = Math.floor(window.scrollY / window.innerHeight);
-            const nextSlide = Math.max(0, Math.min(slides.length - 1, currentSlide + delta));
+            // Don't prevent default - allow natural scrolling
+            // But add snap behavior when scroll stops
 
-            slides[nextSlide].scrollIntoView({ behavior: 'smooth' });
-        }, { passive: false });
+            clearTimeout(scrollTimeout);
 
-        // Arrow key navigation
+            scrollTimeout = setTimeout(() => {
+                const slides = document.querySelectorAll('.slide');
+                const currentPosition = window.scrollY;
+
+                // Find the closest slide
+                let closestSlide = 0;
+                let closestDistance = Infinity;
+
+                slides.forEach((slide, index) => {
+                    const slideTop = slide.offsetTop;
+                    const distance = Math.abs(currentPosition - slideTop);
+
+                    if (distance < closestDistance) {
+                        closestDistance = distance;
+                        closestSlide = index;
+                    }
+                });
+
+                // Snap to closest slide
+                slides[closestSlide].scrollIntoView({ behavior: 'smooth' });
+            }, 150); // Wait 150ms after scroll stops
+        });
+
+        // Arrow key navigation with debouncing
+        let keyTimeout;
         document.addEventListener('keydown', (e) => {
-            const slides = document.querySelectorAll('.slide');
-            const currentSlide = Math.floor(window.scrollY / window.innerHeight);
+            if (keyTimeout) return; // Prevent rapid key presses
 
-            if (e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+            const slides = document.querySelectorAll('.slide');
+            const currentSlide = Math.round(window.scrollY / window.innerHeight);
+
+            if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault();
                 const nextSlide = Math.min(slides.length - 1, currentSlide + 1);
                 slides[nextSlide].scrollIntoView({ behavior: 'smooth' });
+
+                keyTimeout = setTimeout(() => keyTimeout = null, 600);
             } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+                e.preventDefault();
                 const prevSlide = Math.max(0, currentSlide - 1);
                 slides[prevSlide].scrollIntoView({ behavior: 'smooth' });
+
+                keyTimeout = setTimeout(() => keyTimeout = null, 600);
+            } else if (e.key === 'Home') {
+                e.preventDefault();
+                slides[0].scrollIntoView({ behavior: 'smooth' });
+            } else if (e.key === 'End') {
+                e.preventDefault();
+                slides[slides.length - 1].scrollIntoView({ behavior: 'smooth' });
             }
+        });
+
+        // Add CSS scroll snap for better native scrolling
+        document.documentElement.style.scrollSnapType = 'y proximity';
+        document.querySelectorAll('.slide').forEach(slide => {
+            slide.style.scrollSnapAlign = 'start';
         });
     </script>
 </body>
@@ -490,7 +533,7 @@ if (import.meta.main) {
 
     // Parse command line arguments
     let inputFile: string | undefined;
-    let outputFile = "chronicle-wrapped.html";
+    let outputFile: string | undefined; // undefined = stdout
     let year: number | undefined;
 
     for (let i = 0; i < Deno.args.length; i++) {
@@ -498,7 +541,7 @@ if (import.meta.main) {
         if (arg === "--input") {
             inputFile = Deno.args[i + 1];
             i++;
-        } else if (arg === "--output") {
+        } else if (arg === "--output" || arg === "-o") {
             outputFile = Deno.args[i + 1];
             i++;
         } else if (arg === "--year") {
@@ -511,15 +554,27 @@ Usage:
   html.ts [options]
 
 Options:
-  --input <file>     Read audit log from JSONL file
-  --output <file>    Output HTML file (default: chronicle-wrapped.html)
-  --year <year>      Year for report (default: current year)
-  --help, -h         Show this help message
+  --input <file>        Read audit log from JSONL file
+  --output <file>, -o   Output HTML file (default: stdout)
+                        Use '-' for stdout
+  --year <year>         Year for report (default: current year)
+  --help, -h            Show this help message
 
 Examples:
-  html.ts
+  # Output to stdout (default)
+  html.ts > my-wrapped.html
+
+  # Output to specific file
+  html.ts --output chronicle.html
+
+  # Pipe through other tools
+  html.ts | gzip > wrapped.html.gz
+
+  # Read from file, write to file
   html.ts --input audit-log.json --output my-wrapped.html
-  html.ts --year 2024
+
+  # Output to stdout explicitly
+  html.ts --output - > wrapped.html
 `);
             Deno.exit(0);
         }
@@ -532,10 +587,16 @@ Examples:
         console.error("Creating HTML...");
         const html = generateHTML(report);
 
-        console.error(`Writing to ${outputFile}...`);
-        await Deno.writeTextFile(outputFile, html);
-
-        console.error(`✨ Success! Open ${outputFile} in your browser.`);
+        // Write to stdout or file
+        if (!outputFile || outputFile === "-") {
+            // Write to stdout
+            console.log(html);
+        } else {
+            // Write to file
+            console.error(`Writing to ${outputFile}...`);
+            await Deno.writeTextFile(outputFile, html);
+            console.error(`✨ Success! Open ${outputFile} in your browser.`);
+        }
     } catch (error) {
         console.error(`Error: ${error.message}`);
         Deno.exit(1);
