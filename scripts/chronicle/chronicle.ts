@@ -407,7 +407,7 @@ function calculateUserStats(
 
             if (
                 actions.some((a) =>
-                    a.includes("archiveFlag") || a.includes("deleteFlag")
+                    a.includes("updateGlobalArchived") || a.includes("deleteFlag")
                 )
             ) {
                 stats.flagsArchived++;
@@ -443,8 +443,10 @@ function calculateUserStats(
             // Track manual percentage/rollout changes (progressive rollout simulation)
             if (
                 entry.name &&
-                (actions.some((a) => a.includes("updateFallthroughVariationOrRollout")) ||
-                 actions.some((a) => a.includes("updateRollout")))
+                (actions.some((a) => a === "updateFallthrough") ||
+                 actions.some((a) => a === "updateRules")) &&
+                entry.description &&
+                /Set .* rollout to `\d+%`/.test(entry.description)
             ) {
                 const flagKey = entry.name;
                 percentageChanges.set(flagKey, (percentageChanges.get(flagKey) || 0) + 1);
@@ -453,7 +455,7 @@ function calculateUserStats(
             // Track variation rollout changes (experiment simulation)
             if (
                 entry.name &&
-                actions.some((a) => a.includes("updateVariation"))
+                actions.some((a) => a.includes("updateFlagVariations"))
             ) {
                 const flagKey = entry.name;
                 variationRolloutChanges.set(flagKey, (variationRolloutChanges.get(flagKey) || 0) + 1);
@@ -948,7 +950,7 @@ function calculateAchievements(
                 }
             }
 
-            if (actions.some((a) => a.includes("archiveFlag") || a.includes("deleteFlag"))) {
+            if (actions.some((a) => a.includes("updateGlobalArchived") || a.includes("deleteFlag"))) {
                 stats.flagsArchived++;
             }
 
@@ -1030,7 +1032,7 @@ function calculateAchievements(
     if (userStats.progressiveRolloutSimulator && userStats.progressiveRolloutSimulator.changeCount >= 5) {
         achievements.push({
             name: "🎢 Manual Roller",
-            description: `Changed rollout percentages ${userStats.progressiveRolloutSimulator.changeCount} times on "${userStats.progressiveRolloutSimulator.flagKey}" - consider using progressive delivery!`,
+            description: `Changed rollout percentages ${userStats.progressiveRolloutSimulator.changeCount} times on "${userStats.progressiveRolloutSimulator.flagKey}" - Consider using progressive or guarded rollouts!`,
             earned: true,
             value: userStats.progressiveRolloutSimulator.changeCount,
         });
