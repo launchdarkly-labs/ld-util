@@ -26,8 +26,8 @@ Replace `<project-key>` and `<environment-key>` with the actual keys of your Lau
 - `project-key`: The LaunchDarkly project key to analyze
 - `environment-key`: The LaunchDarkly environment key to analyze
 - `--format`: Output format - `json` (default) or `markdown`
-- `--show-tags`: Include flag tags in the output (always included in JSON, optional for Markdown)
-- `--filter-tags`: (Optional) Comma-separated list of tags to filter flags by. When set, `--show-tags` is automatically enabled
+- `--show-tags`: Include flag tags in markdown output (JSON always includes tags regardless of this flag)
+- `--filter-tags`: (Optional) Comma-separated list of tags to filter flags by. When set with markdown format, `--show-tags` is automatically enabled
 
 ### Environment Variables
 
@@ -39,13 +39,16 @@ Replace `<project-key>` and `<environment-key>` with the actual keys of your Lau
 # JSON output (default) - tags always included
 LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production
 
-# Markdown output
+# Markdown output without tags
 LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production --format markdown
 
 # Markdown output with tags
 LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production --format markdown --show-tags
 
-# Filter by specific tags (shows tags automatically)
+# Filter by specific tags (tags shown automatically in markdown)
+LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production --format markdown --filter-tags backend,critical
+
+# Filter by tags with JSON output (tags always included in JSON)
 LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production --filter-tags backend,critical
 ```
 
@@ -74,7 +77,7 @@ The script outputs detailed information for each issue:
 - Summary statistics (total issues, counts by severity)
 - For each issue:
   - Flag key and name
-  - Flag tags (if present)
+  - Flag tags (always included if present on the flag)
   - Severity (critical, warning, unknown)
   - Reason for the issue
   - Fallback value and expected value (if applicable)

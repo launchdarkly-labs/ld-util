@@ -1547,14 +1547,15 @@ if (import.meta.main) {
         .map(t => t.trim())
         .filter(t => t.length > 0);
 
-    // If filter-tags is set, imply show-tags
-    if (filterTags.length > 0 && !flags["show-tags"]) {
-        flags["show-tags"] = true;
-    }
-
     if (flags.format !== "json" && flags.format !== "markdown") {
         console.error(`Error: Invalid format "${flags.format}". Must be "json" or "markdown"`);
         Deno.exit(1);
+    }
+
+    // If filter-tags is set for markdown output, imply show-tags
+    // (JSON output always includes tags regardless of the flag)
+    if (filterTags.length > 0 && flags.format === "markdown" && !flags["show-tags"]) {
+        flags["show-tags"] = true;
     }
 
     const API_KEY = Deno.env.get("LD_API_KEY");
