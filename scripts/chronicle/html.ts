@@ -536,6 +536,31 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
     // Helper to format large numbers
     const formatNumber = (num: number) => num.toLocaleString();
 
+    // Helper to format time
+    const formatTime = (seconds: number) => {
+        if (seconds < 60) return `${seconds}s`;
+        if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+        if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+        return `${Math.round(seconds / 86400)}d`;
+    };
+
+    // Calculate team leaders for each category
+    const teamLeaders = {
+        flagsCreated: reports.reduce((max, r) => r.stats.flagsCreated > (max?.stats.flagsCreated || 0) ? r : max, reports[0]),
+        guardedRollouts: reports.reduce((max, r) => r.stats.guardedRollouts > (max?.stats.guardedRollouts || 0) ? r : max, reports[0]),
+        experiments: reports.reduce((max, r) => r.stats.experimentsCreated > (max?.stats.experimentsCreated || 0) ? r : max, reports[0]),
+        flagsArchived: reports.reduce((max, r) => r.stats.flagsArchived > (max?.stats.flagsArchived || 0) ? r : max, reports[0]),
+        approvalsReviewed: reports.reduce((max, r) => r.stats.approvals.reviewed > (max?.stats.approvals.reviewed || 0) ? r : max, reports[0]),
+        longestStreak: reports.reduce((max, r) => r.stats.insights.longestStreak > (max?.stats.insights.longestStreak || 0) ? r : max, reports[0]),
+        segments: reports.reduce((max, r) => r.stats.segmentsCreated > (max?.stats.segmentsCreated || 0) ? r : max, reports[0]),
+        productionChanges: reports.reduce((max, r) => r.stats.insights.productionChanges > (max?.stats.insights.productionChanges || 0) ? r : max, reports[0]),
+        quickestRollback: reports.filter(r => r.stats.oops).reduce((min, r) => {
+            if (!min?.stats.oops) return r;
+            return r.stats.oops!.fastestSeconds < min.stats.oops!.fastestSeconds ? r : min;
+        }, reports.find(r => r.stats.oops)),
+        fridayFlipper: reports.reduce((max, r) => r.stats.insights.fridayActions > (max?.stats.insights.fridayActions || 0) ? r : max, reports[0]),
+    };
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -896,9 +921,114 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
         <!-- Member Selection UI -->
         <div id="member-selection">
             <h1>🎊 LaunchDarkly Chronicle ${year}</h1>
-            <p style="font-size: 1.2rem; opacity: 0.8; margin-bottom: 2rem;">Select a team member to view their year in review</p>
-            <input type="text" id="search-box" placeholder="Search by name or email...">
-            <div id="member-list"></div>
+
+            <!-- Team Awards Section -->
+            <div style="margin: 3rem 0;">
+                <h2 style="font-size: 2rem; font-weight: 800; margin-bottom: 2rem; text-align: center;">🏆 Team Awards</h2>
+
+                <div class="achievement-grid" style="max-width: 900px; margin: 0 auto;">
+                    <div class="achievement-card">
+                        <div class="emoji">🚩</div>
+                        <div class="name">Most Flags Created</div>
+                        <div class="description">
+                            <strong>${teamLeaders.flagsCreated.user.firstName} ${teamLeaders.flagsCreated.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.flagsCreated.stats.flagsCreated)} flags
+                        </div>
+                    </div>
+
+                    <div class="achievement-card">
+                        <div class="emoji">🛡️</div>
+                        <div class="name">Safety Champion</div>
+                        <div class="description">
+                            <strong>${teamLeaders.guardedRollouts.user.firstName} ${teamLeaders.guardedRollouts.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.guardedRollouts.stats.guardedRollouts)} guarded rollouts
+                        </div>
+                    </div>
+
+                    <div class="achievement-card">
+                        <div class="emoji">🧪</div>
+                        <div class="name">Experiment Leader</div>
+                        <div class="description">
+                            <strong>${teamLeaders.experiments.user.firstName} ${teamLeaders.experiments.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.experiments.stats.experimentsCreated)} experiments
+                        </div>
+                    </div>
+
+                    <div class="achievement-card">
+                        <div class="emoji">🧹</div>
+                        <div class="name">Captain Cleanup</div>
+                        <div class="description">
+                            <strong>${teamLeaders.flagsArchived.user.firstName} ${teamLeaders.flagsArchived.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.flagsArchived.stats.flagsArchived)} flags archived
+                        </div>
+                    </div>
+
+                    <div class="achievement-card">
+                        <div class="emoji">✅</div>
+                        <div class="name">Governance Guru</div>
+                        <div class="description">
+                            <strong>${teamLeaders.approvalsReviewed.user.firstName} ${teamLeaders.approvalsReviewed.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.approvalsReviewed.stats.approvals.reviewed)} approvals reviewed
+                        </div>
+                    </div>
+
+                    <div class="achievement-card">
+                        <div class="emoji">🔥</div>
+                        <div class="name">Longest Streak</div>
+                        <div class="description">
+                            <strong>${teamLeaders.longestStreak.user.firstName} ${teamLeaders.longestStreak.user.lastName}</strong>
+                            <br>${teamLeaders.longestStreak.stats.insights.longestStreak} days
+                        </div>
+                    </div>
+
+                    <div class="achievement-card">
+                        <div class="emoji">🎯</div>
+                        <div class="name">${teamLeaders.segments.stats.segmentsCreated >= 50 ? 'Segment Master' : 'Top Segment Creator'}</div>
+                        <div class="description">
+                            <strong>${teamLeaders.segments.user.firstName} ${teamLeaders.segments.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.segments.stats.segmentsCreated)} segments
+                        </div>
+                    </div>
+
+                    <div class="achievement-card">
+                        <div class="emoji">⚙️</div>
+                        <div class="name">Production Pro</div>
+                        <div class="description">
+                            <strong>${teamLeaders.productionChanges.user.firstName} ${teamLeaders.productionChanges.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.productionChanges.stats.insights.productionChanges)} production changes
+                        </div>
+                    </div>
+
+                    ${teamLeaders.quickestRollback ? `
+                    <div class="achievement-card">
+                        <div class="emoji">⚡</div>
+                        <div class="name">Quickest Rollback</div>
+                        <div class="description">
+                            <strong>${teamLeaders.quickestRollback.user.firstName} ${teamLeaders.quickestRollback.user.lastName}</strong>
+                            <br>${formatTime(teamLeaders.quickestRollback.stats.oops.fastestSeconds)} - "${teamLeaders.quickestRollback.stats.oops.fastestFlag}"
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.fridayFlipper.stats.insights.fridayActions > 0 ? `
+                    <div class="achievement-card">
+                        <div class="emoji">🎉</div>
+                        <div class="name">Friday Flipper</div>
+                        <div class="description">
+                            <strong>${teamLeaders.fridayFlipper.user.firstName} ${teamLeaders.fridayFlipper.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.fridayFlipper.stats.insights.fridayActions)} Friday actions
+                        </div>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+
+            <!-- Member Selection -->
+            <div style="margin-top: 4rem;">
+                <h2 style="font-size: 1.8rem; font-weight: 700; margin-bottom: 1.5rem; text-align: center;">View Individual Reports</h2>
+                <input type="text" id="search-box" placeholder="Search by name or email...">
+                <div id="member-list"></div>
+            </div>
         </div>
 
         <!-- Report Container (hidden initially) -->
@@ -1282,6 +1412,7 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
                     displayMemberList();
                 }
             } else {
+                // Default: show member selection with team awards at top
                 displayMemberList();
             }
         });

@@ -51,6 +51,7 @@ interface ChronicleStats {
     flagUpdates: number;
     experimentsCreated: number;
     segmentsCreated: number;
+    aiConfigsCreated: number;
     approvals: {
         created: number;
         reviewed: number;
@@ -60,6 +61,7 @@ interface ChronicleStats {
     releasePipelines: {
         created: number;
         used: number;
+        phasesProgressed: number;
     };
     integrationsCreated: number;
     guardedRollouts: number;
@@ -106,6 +108,7 @@ interface ChronicleStats {
         cleanupCrew: boolean;
         topEnvironment: string;
         productionChanges: number;
+        fridayActions: number;
     };
 }
 
@@ -365,6 +368,7 @@ function calculateUserStats(
         flagUpdates: 0,
         experimentsCreated: 0,
         segmentsCreated: 0,
+        aiConfigsCreated: 0,
         approvals: {
             created: 0,
             reviewed: 0,
@@ -374,6 +378,7 @@ function calculateUserStats(
         releasePipelines: {
             created: 0,
             used: 0,
+            phasesProgressed: 0,
         },
         integrationsCreated: 0,
         guardedRollouts: 0,
@@ -400,6 +405,7 @@ function calculateUserStats(
             cleanupCrew: false,
             topEnvironment: "",
             productionChanges: 0,
+            fridayActions: 0,
         },
     };
 
@@ -411,11 +417,30 @@ function calculateUserStats(
     const environmentCounts = new Map<string, number>();
 
     // Track flag on/off events for remediation
-    const flagEvents: Map<string, Array<{ date: number; action: string; titleVerb: string }>> = new Map();
-    
+    const flagEvents: Map<string, Array<{ date: number; action: string; titleVerb: string; isCritical: boolean }>> = new Map();
+
     // Track percentage/rollout changes for manual progressive rollout detection
     const percentageChanges = new Map<string, number>();
-    
+
+    // Define flag update actions - targeting/environment actions that affect flag behavior
+    const flagUpdateActions = new Set([
+        'applyApprovalRequest',
+        'stopMeasuredRolloutOnFlagFallthrough',
+        'stopMeasuredRolloutOnFlagRule',
+        'updateExpiringTargets',
+        'updateFallthrough',
+        'updateFallthroughWithMeasuredRollout',
+        'updateFeatureWorkflows',
+        'updateMeasuredRolloutConfiguration',
+        'updateOffVariation',
+        'updateOn',
+        'updatePrerequisites',
+        'updateRules',
+        'updateRulesWithMeasuredRollout',
+        'updateScheduledChanges',
+        'updateTargets',
+    ]);
+
     // Track variation rollout changes for experiment simulation detection
     const variationRolloutChanges = new Map<string, number>();
     
@@ -474,11 +499,8 @@ function calculateUserStats(
                 }
             }
 
-            if (
-                actions.some((a) =>
-                    a.includes("update") && !a.includes("MeasuredRollout")
-                )
-            ) {
+            // Count flag updates - only targeting/environment actions that affect flag behavior
+            if (actions.some((a) => flagUpdateActions.has(a))) {
                 stats.flagUpdates++;
             }
 
@@ -488,10 +510,24 @@ function calculateUserStats(
                 if (!flagEvents.has(flagKey)) {
                     flagEvents.set(flagKey, []);
                 }
+
+                // Check if this event happened in a critical environment
+                let isCritical = false;
+                if (entry.target?.resources) {
+                    for (const resource of entry.target.resources) {
+                        const envMatch = resource.match(/env\/([^:]+)/);
+                        if (envMatch && envMatch[1].includes(';critical')) {
+                            isCritical = true;
+                            break;
+                        }
+                    }
+                }
+
                 flagEvents.get(flagKey)!.push({
                     date: entry.date,
                     action: "updateOn",
                     titleVerb: entry.titleVerb,
+                    isCritical,
                 });
             }
             
@@ -531,6 +567,13 @@ function calculateUserStats(
             }
         }
 
+        // AI Configs
+        if (entry.kind === "ai-config" || actions.some((a) => a.includes("AIConfig"))) {
+            if (actions.some((a) => a.includes("createAIConfig"))) {
+                stats.aiConfigsCreated++;
+            }
+        }
+
         // Approvals
         if (actions.some((a) => a.includes("createApprovalRequest"))) {
             stats.approvals.created++;
@@ -548,6 +591,9 @@ function calculateUserStats(
         }
         if (actions.some((a) => a.includes("addReleasePipeline") || a.includes("updateReleasePhaseStatus"))) {
             stats.releasePipelines.used++;
+        }
+        if (actions.some((a) => a.includes("updateReleasePhaseStatus"))) {
+            stats.releasePipelines.phasesProgressed++;
         }
 
         // Integrations
@@ -569,11 +615,15 @@ function calculateUserStats(
                 }
 
                 // Track environment
-                const envMatch = resource.match(/env\/([^:;]+)/);
+                const envMatch = resource.match(/env\/([^:]+)/);
                 if (envMatch) {
-                    const env = envMatch[1];
+                    const envPart = envMatch[1];
+                    // Extract environment name (before any semicolon/tags)
+                    const env = envPart.split(';')[0];
                     environmentCounts.set(env, (environmentCounts.get(env) || 0) + 1);
-                    if (env === "production") {
+
+                    // Count changes to critical environments (tagged with ;critical)
+                    if (envPart.includes(';critical')) {
                         stats.insights.productionChanges++;
                     }
                 }
@@ -590,6 +640,11 @@ function calculateUserStats(
         dayCounts.set(dayKey, (dayCounts.get(dayKey) || 0) + 1);
         hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1);
         dateSet.add(dayKey);
+
+        // Friday activity (Friday = 5)
+        if (dayOfWeek === 5) {
+            stats.insights.fridayActions++;
+        }
 
         // Weekend activity (Saturday = 6, Sunday = 0)
         if (dayOfWeek === 0 || dayOfWeek === 6) {
@@ -714,7 +769,7 @@ function calculateUserStats(
 }
 
 function calculateRemediation(
-    flagEvents: Map<string, Array<{ date: number; action: string; titleVerb: string }>>,
+    flagEvents: Map<string, Array<{ date: number; action: string; titleVerb: string; isCritical: boolean }>>,
 ): {
     fastestSeconds: number;
     fastestFlag: string;
@@ -764,7 +819,7 @@ function calculateRemediation(
 }
 
 function calculateOops(
-    flagEvents: Map<string, Array<{ date: number; action: string; titleVerb: string }>>,
+    flagEvents: Map<string, Array<{ date: number; action: string; titleVerb: string; isCritical: boolean }>>,
 ): {
     fastestSeconds: number;
     fastestFlag: string;
@@ -780,10 +835,11 @@ function calculateOops(
             const current = events[i];
             const next = events[i + 1];
 
-            // Check if this is a "turned on" followed by "turned off" (rollback/oops)
+            // Check if this is a "turned on" followed by "turned off" (rollback/oops) in a critical environment
             if (
                 current.titleVerb.startsWith("turned on") &&
-                next.titleVerb.startsWith("turned off")
+                next.titleVerb.startsWith("turned off") &&
+                current.isCritical && next.isCritical
             ) {
                 const seconds = (next.date - current.date) / 1000;
                 rollbacks.push({ flagKey, seconds });
@@ -917,6 +973,9 @@ function calculateAchievements(
         activityTypes: Set<string>;
         approvalTotal: number;
         approvalThroughProcess: number;
+        guardedRollouts: number;
+        experimentsCreated: number;
+        aiConfigsCreated: number;
     }>();
 
     // Track first events of the year
@@ -946,6 +1005,9 @@ function calculateAchievements(
                 activityTypes: new Set(),
                 approvalTotal: 0,
                 approvalThroughProcess: 0,
+                guardedRollouts: 0,
+                experimentsCreated: 0,
+                aiConfigsCreated: 0,
             });
         }
 
@@ -1025,6 +1087,7 @@ function calculateAchievements(
 
             // Track first guarded rollout
             if (actions.some((a) => a.includes("MeasuredRollout"))) {
+                stats.guardedRollouts++;
                 if (!firstGuardedRollout || entry.date < firstGuardedRollout.date) {
                     firstGuardedRollout = {
                         memberId,
@@ -1033,6 +1096,18 @@ function calculateAchievements(
                     };
                 }
             }
+        }
+
+        // Track experiments created
+        if ((entry.kind === "experiment" || actions.some((a) => a.includes("createExperiment"))) &&
+            actions.some((a) => a.includes("createExperiment"))) {
+            stats.experimentsCreated++;
+        }
+
+        // Track AI configs created
+        if ((entry.kind === "ai-config" || actions.some((a) => a.includes("createAIConfig"))) &&
+            actions.some((a) => a.includes("createAIConfig"))) {
+            stats.aiConfigsCreated++;
         }
     }
 
@@ -1056,6 +1131,84 @@ function calculateAchievements(
             earned: true,
             rank: archivedRank,
             value: userStats.flagsArchived,
+        });
+    }
+
+    // Safety Champion - Most guarded rollouts
+    const sortedByGuardedRollouts = Array.from(memberStats.entries())
+        .map(([id, stats]) => [id, stats.guardedRollouts] as const)
+        .sort((a, b) => b[1] - a[1]);
+
+    const guardedRolloutsRank = sortedByGuardedRollouts.findIndex(([id]) => id === userId) + 1;
+    const userGuardedRollouts = sortedByGuardedRollouts.find(([id]) => id === userId)?.[1] || 0;
+
+    if (guardedRolloutsRank === 1 && userGuardedRollouts > 0) {
+        achievements.push({
+            name: "🛡️ Safety Champion",
+            description: `Most guarded rollouts in your team (${userGuardedRollouts} rollouts)`,
+            earned: true,
+            rank: 1,
+            value: userGuardedRollouts,
+        });
+    } else if (guardedRolloutsRank <= 3 && userGuardedRollouts >= 10) {
+        achievements.push({
+            name: "🛡️ Safety First",
+            description: `#${guardedRolloutsRank} most guarded rollouts (${userGuardedRollouts})`,
+            earned: true,
+            rank: guardedRolloutsRank,
+            value: userGuardedRollouts,
+        });
+    }
+
+    // Experiment Leader - Most experiments
+    const sortedByExperiments = Array.from(memberStats.entries())
+        .map(([id, stats]) => [id, stats.experimentsCreated] as const)
+        .sort((a, b) => b[1] - a[1]);
+
+    const experimentsRank = sortedByExperiments.findIndex(([id]) => id === userId) + 1;
+    const userExperiments = sortedByExperiments.find(([id]) => id === userId)?.[1] || 0;
+
+    if (experimentsRank === 1 && userExperiments > 0) {
+        achievements.push({
+            name: "🧪 Experiment Leader",
+            description: `Most experiments in your team (${userExperiments} experiments)`,
+            earned: true,
+            rank: 1,
+            value: userExperiments,
+        });
+    } else if (experimentsRank <= 3 && userExperiments >= 5) {
+        achievements.push({
+            name: "🧪 Experiment Pro",
+            description: `#${experimentsRank} most experiments (${userExperiments})`,
+            earned: true,
+            rank: experimentsRank,
+            value: userExperiments,
+        });
+    }
+
+    // AI Innovator - Most AI Configs
+    const sortedByAIConfigs = Array.from(memberStats.entries())
+        .map(([id, stats]) => [id, stats.aiConfigsCreated] as const)
+        .sort((a, b) => b[1] - a[1]);
+
+    const aiConfigsRank = sortedByAIConfigs.findIndex(([id]) => id === userId) + 1;
+    const userAIConfigs = sortedByAIConfigs.find(([id]) => id === userId)?.[1] || 0;
+
+    if (aiConfigsRank === 1 && userAIConfigs > 0) {
+        achievements.push({
+            name: "🤖 AI Innovator",
+            description: `Most AI Configs in your team (${userAIConfigs} configs)`,
+            earned: true,
+            rank: 1,
+            value: userAIConfigs,
+        });
+    } else if (aiConfigsRank <= 3 && userAIConfigs >= 3) {
+        achievements.push({
+            name: "🤖 AI Pioneer",
+            description: `#${aiConfigsRank} most AI Configs (${userAIConfigs})`,
+            earned: true,
+            rank: aiConfigsRank,
+            value: userAIConfigs,
         });
     }
 
@@ -1149,6 +1302,30 @@ function calculateAchievements(
         });
     }
 
+    // AI Config Achievements
+    if (userStats.aiConfigsCreated >= 20) {
+        achievements.push({
+            name: "🤖 AI Architect",
+            description: `Created ${userStats.aiConfigsCreated} AI Configs`,
+            earned: true,
+            value: userStats.aiConfigsCreated,
+        });
+    } else if (userStats.aiConfigsCreated >= 10) {
+        achievements.push({
+            name: "🤖 AI Explorer",
+            description: `Created ${userStats.aiConfigsCreated} AI Configs`,
+            earned: true,
+            value: userStats.aiConfigsCreated,
+        });
+    } else if (userStats.aiConfigsCreated >= 5) {
+        achievements.push({
+            name: "🤖 AI Curious",
+            description: `Created ${userStats.aiConfigsCreated} AI Configs`,
+            earned: true,
+            value: userStats.aiConfigsCreated,
+        });
+    }
+
     // Segment Master
     if (userStats.segmentsCreated >= 50) {
         achievements.push({
@@ -1183,6 +1360,23 @@ function calculateAchievements(
             description: `Created ${userStats.releasePipelines.created} release pipelines`,
             earned: true,
             value: userStats.releasePipelines.created,
+        });
+    }
+
+    // Release Manager - Progressing release phases
+    if (userStats.releasePipelines.phasesProgressed >= 50) {
+        achievements.push({
+            name: "📦 Release Manager",
+            description: `Progressed ${userStats.releasePipelines.phasesProgressed} release pipeline phases`,
+            earned: true,
+            value: userStats.releasePipelines.phasesProgressed,
+        });
+    } else if (userStats.releasePipelines.phasesProgressed >= 20) {
+        achievements.push({
+            name: "📦 Release Coordinator",
+            description: `Progressed ${userStats.releasePipelines.phasesProgressed} release pipeline phases`,
+            earned: true,
+            value: userStats.releasePipelines.phasesProgressed,
         });
     }
 
