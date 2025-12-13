@@ -1115,6 +1115,7 @@ async function generateFallbackReport(
     projectKey: string,
     environmentKey: string,
     apiKey: string,
+    filterTags: string[],
 ): Promise<{ issues: Issue[]; flagsMap: Map<string, Flag> }> {
     const issues: Issue[] = [];
     const flagsMap = new Map<string, Flag>();
@@ -1142,6 +1143,12 @@ async function generateFallbackReport(
 
     // Analyze each flag
     for (const [flagKey, flag] of flagsMap) {
+        if (filterTags.length > 0) {
+            if (!flag.tags?.some(tag => filterTags.includes(tag))) {
+                continue;
+            }
+        }
+
         const status = statusesMap.get(flagKey);
         if (!status) {
             // Flag exists but no status - this could be an issue
@@ -1529,14 +1536,26 @@ function renderMarkdown(
 // Main execution
 if (import.meta.main) {
     const flags = parseArgs(Deno.args, {
-        string: ["format"],
+        string: ["format", "filter-tags"],
         boolean: ["show-tags"],
-        default: { format: "json", "show-tags": false },
+        default: { format: "json", "filter-tags": "", "show-tags": false },
     });
+
+    // Parse and clean filter tags
+    const filterTags = flags["filter-tags"]
+        .split(",")
+        .map(t => t.trim())
+        .filter(t => t.length > 0);
 
     if (flags.format !== "json" && flags.format !== "markdown") {
         console.error(`Error: Invalid format "${flags.format}". Must be "json" or "markdown"`);
         Deno.exit(1);
+    }
+
+    // If filter-tags is set for markdown output, imply show-tags
+    // (JSON output always includes tags regardless of the flag)
+    if (filterTags.length > 0 && flags.format === "markdown" && !flags["show-tags"]) {
+        flags["show-tags"] = true;
     }
 
     const API_KEY = Deno.env.get("LD_API_KEY");
@@ -1550,18 +1569,18 @@ if (import.meta.main) {
     const projectKey = flags._[0] as string | undefined;
     if (!projectKey) {
         console.error("Error: Project key argument is required");
-        console.error("Usage: fallback-report.ts <project-key> <environment-key> [--format json|markdown] [--show-tags]");
+        console.error("Usage: fallback-report.ts <project-key> <environment-key> [--format json|markdown] [--show-tags] [--filter-tags tag1,tag2]");
         Deno.exit(1);
     }
 
     const environmentKey = flags._[1] as string | undefined;
     if (!environmentKey) {
         console.error("Error: Environment key argument is required");
-        console.error("Usage: fallback-report.ts <project-key> <environment-key> [--format json|markdown] [--show-tags]");
+        console.error("Usage: fallback-report.ts <project-key> <environment-key> [--format json|markdown] [--show-tags] [--filter-tags tag1,tag2]");
         Deno.exit(1);
     }
 
-    generateFallbackReport(projectKey, environmentKey, API_KEY)
+    generateFallbackReport(projectKey, environmentKey, API_KEY, filterTags)
         .then(({ issues, flagsMap }) => {
             const reportData = {
                 projectKey,
