@@ -16,7 +16,7 @@ A script that analyzes feature flag fallback values to detect stale or incorrect
 ## Usage
 
 ```bash
-deno run --allow-net --allow-env fallback-report.ts <project-key> <environment-key> [--format json|markdown]
+deno run --allow-net --allow-env fallback-report.ts <project-key> <environment-key> [--format json|markdown] [--show-tags] [--filter-tags tag1,tag2]
 ```
 
 Replace `<project-key>` and `<environment-key>` with the actual keys of your LaunchDarkly project and environment.
@@ -26,7 +26,8 @@ Replace `<project-key>` and `<environment-key>` with the actual keys of your Lau
 - `project-key`: The LaunchDarkly project key to analyze
 - `environment-key`: The LaunchDarkly environment key to analyze
 - `--format`: Output format - `json` (default) or `markdown`
-- `--filter-tags`: (Optional) Comma-separated list of tags to filter flags by
+- `--show-tags`: Include flag tags in the output (always included in JSON, optional for Markdown)
+- `--filter-tags`: (Optional) Comma-separated list of tags to filter flags by. When set, `--show-tags` is automatically enabled
 
 ### Environment Variables
 
@@ -35,11 +36,17 @@ Replace `<project-key>` and `<environment-key>` with the actual keys of your Lau
 ### Examples
 
 ```bash
-# JSON output (default)
+# JSON output (default) - tags always included
 LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production
 
 # Markdown output
 LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production --format markdown
+
+# Markdown output with tags
+LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production --format markdown --show-tags
+
+# Filter by specific tags (shows tags automatically)
+LD_API_KEY=api-123 deno run --allow-net --allow-env fallback-report.ts my-project production --filter-tags backend,critical
 ```
 
 ## How It Works
@@ -67,6 +74,7 @@ The script outputs detailed information for each issue:
 - Summary statistics (total issues, counts by severity)
 - For each issue:
   - Flag key and name
+  - Flag tags (if present)
   - Severity (critical, warning, unknown)
   - Reason for the issue
   - Fallback value and expected value (if applicable)
@@ -81,6 +89,7 @@ Human-readable report with:
 - Summary section
 - Issues grouped by severity (Critical, Warnings, Unknown/Missing Data)
 - Detailed information for each flag including variations served and impacted users
+- Flag tags (when `--show-tags` flag is used)
 
 ### Exit Code
 - `0`: Script executed successfully (regardless of whether issues were found)
