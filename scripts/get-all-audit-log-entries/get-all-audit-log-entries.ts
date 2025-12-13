@@ -36,9 +36,10 @@ export async function* getAllAuditLogEntries(
         after?: string | number;
         query?: string;
         spec?: string;
+        baseUrl?: string;
     },
 ): AsyncGenerator<Record<string, unknown>> {
-    const baseUrl = "https://app.launchdarkly.com/";
+    const baseUrl = options?.baseUrl || "https://app.launchdarkly.com";
     let nextUrl: URL | null = new URL("/api/v2/auditlog", baseUrl);
 
     // Set up initial query parameters
@@ -145,6 +146,7 @@ export async function* getAllAuditLogEntriesParallel(
         spec?: string;
         parallelChunks: number;
         onProgress?: ProgressCallback;
+        baseUrl?: string;
     },
 ): AsyncGenerator<Record<string, unknown>> {
     // Calculate time range
@@ -214,6 +216,7 @@ export async function* getAllAuditLogEntriesParallel(
                         spec: options.spec,
                         after: chunk.after,
                         before: chunk.before,
+                        baseUrl: options.baseUrl,
                     })
                 ) {
                     queue.push(entry);
@@ -298,12 +301,18 @@ if (import.meta.main) {
         Deno.exit(1);
     }
 
+    // Get base URL from environment variable or default
+    let baseUrl = Deno.env.get("LD_BASE_URL") ||
+                  Deno.env.get("LAUNCHDARKLY_BASE_URL") ||
+                  "https://app.launchdarkly.com";
+
     // Parse command line arguments
     const options: {
         before?: string | number;
         after?: string | number;
         query?: string;
         spec?: string;
+        baseUrl?: string;
     } = {};
     let parallelChunks: number | undefined;
     let sorted = false;
@@ -347,6 +356,13 @@ if (import.meta.main) {
                         Deno.exit(1);
                     }
                     break;
+                case "base-url":
+                    baseUrl = value;
+                    // Ensure it has https:// prefix
+                    if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+                        baseUrl = "https://" + baseUrl;
+                    }
+                    break;
                 default:
                     console.error(`Error: Unknown argument ${arg}`);
                     Deno.exit(1);
@@ -360,6 +376,9 @@ if (import.meta.main) {
         const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
         options.after = thirtyDaysAgo;
     }
+
+    // Add baseUrl to options
+    options.baseUrl = baseUrl;
 
     try {
         if (sorted) {

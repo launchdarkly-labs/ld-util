@@ -172,8 +172,7 @@ export interface ChronicleReport {
 // API Helper Functions
 // ============================================================================
 
-async function getCallerIdentity(apiKey: string): Promise<CallerIdentity> {
-    const baseUrl = "https://app.launchdarkly.com/";
+async function getCallerIdentity(apiKey: string, baseUrl: string): Promise<CallerIdentity> {
     const url = new URL("/api/v2/caller-identity", baseUrl);
 
     const response = await fetch(url, {
@@ -201,8 +200,8 @@ async function getCallerIdentity(apiKey: string): Promise<CallerIdentity> {
 async function getMemberDetails(
     apiKey: string,
     memberId: string,
+    baseUrl: string,
 ): Promise<MemberDetails> {
-    const baseUrl = "https://app.launchdarkly.com/";
     const url = new URL(`/api/v2/members/${memberId}`, baseUrl);
 
     const response = await fetch(url, {
@@ -220,6 +219,46 @@ async function getMemberDetails(
     }
 
     return await response.json();
+}
+
+async function getAllMembers(apiKey: string, baseUrl: string): Promise<MemberDetails[]> {
+    const members: MemberDetails[] = [];
+    let nextUrl: string | null = "/api/v2/members?limit=100";
+
+    while (nextUrl) {
+        const url = new URL(nextUrl, baseUrl);
+        const response = await fetch(url, {
+            headers: {
+                "Authorization": apiKey,
+                "Content-Type": "application/json",
+            },
+        });
+
+        if (!response.ok) {
+            throw new Error(
+                `Failed to fetch members: ${response.status} ${response.statusText}`,
+            );
+        }
+
+        const data = await response.json();
+
+        // Add members from this page
+        if (data.items && Array.isArray(data.items)) {
+            for (const member of data.items) {
+                members.push({
+                    _id: member._id,
+                    email: member.email,
+                    firstName: member.firstName || "",
+                    lastName: member.lastName || "",
+                });
+            }
+        }
+
+        // Check for next page
+        nextUrl = data._links?.next?.href || null;
+    }
+
+    return members;
 }
 
 // ============================================================================
@@ -271,6 +310,7 @@ async function* fetchAuditLogFromAPI(
     apiKey: string,
     year: number,
     parallelChunks = 10,
+    baseUrl = "https://app.launchdarkly.com",
 ): AsyncGenerator<AuditLogEntry> {
     // Calculate start of year (Jan 1 00:00:00 UTC)
     const startOfYear = new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0)).getTime();
@@ -283,6 +323,7 @@ async function* fetchAuditLogFromAPI(
             after: startOfYear,
             before: endOfYear,
             parallelChunks,
+            baseUrl,
             onProgress: (progress) => {
                 // Log progress to stderr so it doesn't interfere with JSON output
                 if (progress.type === "fetching" || progress.type === "chunk_complete") {
@@ -1506,19 +1547,152 @@ function calculateRankings(
 }
 
 // ============================================================================
-// Main Function
+// Main Functions
 // ============================================================================
+
+/**
+ * Helper function to generate a report for a specific member from pre-fetched audit logs
+ */
+function generateChronicleReportForMember(
+    member: MemberDetails,
+    allEntries: AuditLogEntry[],
+    memberCache: Map<string, MemberDetails>,
+    year: number,
+): ChronicleReport {
+    // Filter entries for this specific member
+    const userEntries = allEntries.filter(
+        (entry) => entry.member?._id === member._id,
+    );
+
+    // Calculate statistics
+    const stats = calculateUserStats(userEntries);
+
+    // Find collaborators
+    const collaborators = findCollaborators(
+        userEntries,
+        allEntries,
+        member._id,
+        memberCache,
+    );
+
+    // Calculate rankings
+    const rankings = calculateRankings(
+        allEntries,
+        member._id,
+        stats.flagsCreated,
+        memberCache,
+    );
+
+    // Calculate achievements
+    const achievements = calculateAchievements(
+        member._id,
+        stats,
+        allEntries,
+        collaborators,
+    );
+
+    // Build report
+    return {
+        user: {
+            memberId: member._id,
+            email: member.email,
+            firstName: member.firstName,
+            lastName: member.lastName,
+        },
+        year,
+        stats,
+        collaborators: collaborators.slice(0, 10), // Top 10 collaborators
+        rankings: {
+            flagsCreated: rankings,
+        },
+        achievements,
+    };
+}
+
+/**
+ * Generator function to create reports for all members in the account
+ */
+export async function* generateAllMemberReports(
+    apiKey: string,
+    inputFile?: string,
+    year?: number,
+    parallelChunks = 10,
+    baseUrl = "https://app.launchdarkly.com",
+): AsyncGenerator<ChronicleReport> {
+    // Determine year
+    const targetYear = year || new Date().getUTCFullYear();
+    console.error(`Report year: ${targetYear}`);
+
+    // Load ALL audit log entries once
+    console.error("Loading all audit log entries...");
+    const allEntries: AuditLogEntry[] = [];
+    const memberCache = new Map<string, MemberDetails>();
+
+    const entrySource = inputFile
+        ? readAuditLogFromFile(inputFile)
+        : fetchAuditLogFromAPI(apiKey, targetYear, parallelChunks, baseUrl);
+
+    for await (const entry of entrySource) {
+        allEntries.push(entry);
+
+        // Cache member details from entries
+        if (entry.member && !memberCache.has(entry.member._id)) {
+            memberCache.set(entry.member._id, {
+                _id: entry.member._id,
+                email: entry.member.email,
+                firstName: entry.member.firstName,
+                lastName: entry.member.lastName,
+            });
+        }
+    }
+
+    // Sort entries by date (oldest first)
+    console.error("Sorting entries by date...");
+    allEntries.sort((a, b) => a.date - b.date);
+
+    console.error(`Loaded ${allEntries.length} total audit log entries`);
+
+    // Fetch all members from the account
+    console.error("Fetching all members...");
+    const allMembers = await getAllMembers(apiKey, baseUrl);
+    console.error(`Found ${allMembers.length} members`);
+
+    // Update member cache with full member details
+    for (const member of allMembers) {
+        memberCache.set(member._id, member);
+    }
+
+    // Generate report for each member
+    for (let i = 0; i < allMembers.length; i++) {
+        const member = allMembers[i];
+        console.error(
+            `[${i + 1}/${allMembers.length}] Generating report for ${member.firstName} ${member.lastName} (${member.email})...`,
+        );
+
+        const report = generateChronicleReportForMember(
+            member,
+            allEntries,
+            memberCache,
+            targetYear,
+        );
+
+        yield report;
+    }
+
+    console.error("✨ Finished generating all reports");
+}
 
 export async function generateChronicleReport(
     apiKey: string,
     inputFile?: string,
     year?: number,
     parallelChunks = 10,
+    baseUrl = "https://app.launchdarkly.com",
 ): Promise<ChronicleReport> {
     // Get caller identity
     console.error("Fetching caller identity...");
-    const caller = await getCallerIdentity(apiKey);
-    const callerDetails = await getMemberDetails(apiKey, caller._id);
+    const caller = await getCallerIdentity(apiKey, baseUrl);
+    const callerDetails = await getMemberDetails(apiKey, caller._id, baseUrl);
 
     console.error(
         `Generating report for ${callerDetails.firstName} ${callerDetails.lastName} (${callerDetails.email})`,
@@ -1539,7 +1713,7 @@ export async function generateChronicleReport(
 
     const entrySource = inputFile
         ? readAuditLogFromFile(inputFile)
-        : fetchAuditLogFromAPI(apiKey, targetYear, parallelChunks);
+        : fetchAuditLogFromAPI(apiKey, targetYear, parallelChunks, baseUrl);
 
     for await (const entry of entrySource) {
         allEntries.push(entry);
@@ -1634,10 +1808,16 @@ if (import.meta.main) {
         Deno.exit(1);
     }
 
+    // Get base URL from environment variable or default
+    let baseUrl = Deno.env.get("LD_BASE_URL") ||
+                  Deno.env.get("LAUNCHDARKLY_BASE_URL") ||
+                  "https://app.launchdarkly.com";
+
     // Parse command line arguments
     let inputFile: string | undefined;
     let year: number | undefined;
     let parallelChunks = 10; // Default to 10 parallel requests
+    let everyone = false;
 
     for (let i = 0; i < Deno.args.length; i++) {
         const arg = Deno.args[i];
@@ -1672,6 +1852,19 @@ if (import.meta.main) {
                 Deno.exit(1);
             }
             i++;
+        } else if (arg === "--base-url") {
+            baseUrl = Deno.args[i + 1];
+            if (!baseUrl) {
+                console.error("Error: --base-url requires a URL");
+                Deno.exit(1);
+            }
+            // Ensure it has https:// prefix
+            if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+                baseUrl = "https://" + baseUrl;
+            }
+            i++;
+        } else if (arg === "--everyone") {
+            everyone = true;
         } else if (arg === "--help" || arg === "-h") {
             console.log(`Chronicle - Generate a Spotify Wrapped-style report for LaunchDarkly
 
@@ -1682,13 +1875,16 @@ Options:
   --input <file>      Read audit log from JSONL file instead of API
   --year <year>       Specify year for report (default: current year)
   --parallel <num>    Number of parallel requests (default: 10)
+  --base-url <url>    LaunchDarkly API base URL (default: https://app.launchdarkly.com)
+  --everyone          Generate reports for all members (output as NDJSON)
   --help, -h          Show this help message
 
 Environment Variables:
   LAUNCHDARKLY_API_KEY or LD_API_KEY - Your LaunchDarkly API key (required)
+  LD_BASE_URL or LAUNCHDARKLY_BASE_URL - API base URL (default: https://app.launchdarkly.com)
 
 Examples:
-  # Generate report for current year from API
+  # Generate report for current year from API (current user only)
   chronicle.ts
 
   # Generate report from file
@@ -1696,14 +1892,50 @@ Examples:
 
   # Generate report for specific year with 5 parallel requests
   chronicle.ts --year 2024 --parallel 5
+
+  # Generate reports for all members (NDJSON output)
+  chronicle.ts --everyone
+
+  # Generate reports for all members and save to file
+  chronicle.ts --everyone > all-reports.ndjson
+
+  # Use a custom LaunchDarkly instance
+  chronicle.ts --base-url https://app.launchdarkly.us
+
+  # Or set via environment variable
+  export LD_BASE_URL=https://app.ld.catamorphic.com
+  chronicle.ts
 `);
             Deno.exit(0);
         }
     }
 
     try {
-        const report = await generateChronicleReport(API_KEY, inputFile, year, parallelChunks);
-        console.log(JSON.stringify(report, null, 2));
+        if (everyone) {
+            // Generate reports for all members and output as NDJSON
+            for await (
+                const report of generateAllMemberReports(
+                    API_KEY,
+                    inputFile,
+                    year,
+                    parallelChunks,
+                    baseUrl,
+                )
+            ) {
+                // Output each report as a single line of JSON (NDJSON format)
+                console.log(JSON.stringify(report));
+            }
+        } else {
+            // Generate report for single user (current API key owner)
+            const report = await generateChronicleReport(
+                API_KEY,
+                inputFile,
+                year,
+                parallelChunks,
+                baseUrl,
+            );
+            console.log(JSON.stringify(report, null, 2));
+        }
     } catch (error) {
         console.error(`Error: ${error.message}`);
         if (error.stack) {
