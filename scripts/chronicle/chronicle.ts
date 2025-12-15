@@ -64,6 +64,8 @@ interface ChronicleStats {
         phasesProgressed: number;
     };
     integrationsCreated: number;
+    flagLinksCreated: number;
+    flagsLinkedToViews: number;
     guardedRollouts: number;
     projectsWorkedOn: string[];
     totalProjects: number;
@@ -103,12 +105,12 @@ interface ChronicleStats {
     insights: {
         longestStreak: number;
         weekendWarrior: boolean;
-        nightOwl: boolean;
-        earlyBird: boolean;
         cleanupCrew: boolean;
         topEnvironment: string;
         productionChanges: number;
         fridayActions: number;
+        aiActions: number;
+        approvalBuddy: ApprovalBuddy | null;
     };
 }
 
@@ -117,6 +119,13 @@ interface Collaborator {
     email: string;
     name: string;
     sharedFlags: number;
+}
+
+interface ApprovalBuddy {
+    memberId: string;
+    email: string;
+    name: string;
+    approvalsReviewed: number;
 }
 
 interface Ranking {
@@ -381,6 +390,8 @@ function calculateUserStats(
             phasesProgressed: 0,
         },
         integrationsCreated: 0,
+        flagLinksCreated: 0,
+        flagsLinkedToViews: 0,
         guardedRollouts: 0,
         projectsWorkedOn: [],
         totalProjects: 0,
@@ -400,12 +411,12 @@ function calculateUserStats(
         insights: {
             longestStreak: 0,
             weekendWarrior: false,
-            nightOwl: false,
-            earlyBird: false,
             cleanupCrew: false,
             topEnvironment: "",
             productionChanges: 0,
             fridayActions: 0,
+            aiActions: 0,
+            approvalBuddy: null,
         },
     };
 
@@ -464,8 +475,6 @@ function calculateUserStats(
     ];
 
     let weekendCount = 0;
-    let nightCount = 0;
-    let earlyMorningCount = 0;
 
     for (const entry of userEntries) {
         const actions = entry.accesses.map((a) => a.action);
@@ -572,6 +581,18 @@ function calculateUserStats(
             if (actions.some((a) => a.includes("createAIConfig"))) {
                 stats.aiConfigsCreated++;
             }
+            // Count any AI-related action
+            stats.insights.aiActions++;
+        }
+
+        // AI Tools - check resources for aitool
+        if (entry.target?.resources) {
+            for (const resource of entry.target.resources) {
+                if (resource.includes('aitool')) {
+                    stats.insights.aiActions++;
+                    break; // Only count once per entry
+                }
+            }
         }
 
         // Approvals
@@ -599,6 +620,16 @@ function calculateUserStats(
         // Integrations
         if (actions.some((a) => a.includes("createIntegration"))) {
             stats.integrationsCreated++;
+        }
+
+        // Flag Links
+        if (actions.some((a) => a.includes("createFlagLink"))) {
+            stats.flagLinksCreated++;
+        }
+
+        // Flag to View Links
+        if (actions.some((a) => a.includes("linkFlagToView"))) {
+            stats.flagsLinkedToViews++;
         }
 
         // Guarded rollouts
@@ -650,16 +681,6 @@ function calculateUserStats(
         if (dayOfWeek === 0 || dayOfWeek === 6) {
             weekendCount++;
         }
-
-        // Night owl (10 PM - 4 AM)
-        if (hour >= 22 || hour < 4) {
-            nightCount++;
-        }
-
-        // Early bird (5 AM - 8 AM)
-        if (hour >= 5 && hour < 8) {
-            earlyMorningCount++;
-        }
     }
 
     // Calculate remediation stats (off → on)
@@ -703,8 +724,6 @@ function calculateUserStats(
     // Calculate insights
     stats.insights.longestStreak = calculateLongestStreak(dateSet);
     stats.insights.weekendWarrior = weekendCount > 50; // More than 50 weekend actions
-    stats.insights.nightOwl = nightCount > userEntries.length * 0.2; // More than 20% at night
-    stats.insights.earlyBird = earlyMorningCount > userEntries.length * 0.15; // More than 15% early morning
     stats.insights.cleanupCrew = stats.flagsArchived > stats.flagsCreated * 0.5; // Archived more than 50% of created
 
     // Find top environment
@@ -947,6 +966,91 @@ function findCollaborators(
     return collaborators.sort((a, b) => b.sharedFlags - a.sharedFlags);
 }
 
+function findApprovalBuddy(
+    userEntries: AuditLogEntry[],
+    allEntries: AuditLogEntry[],
+    userId: string,
+    memberCache: Map<string, MemberDetails>,
+): ApprovalBuddy | null {
+    // Find all approval requests created by the user
+    // Track by flag name + approval request name from description
+    const userApprovalRequests = new Set<string>();
+
+    for (const entry of userEntries) {
+        const actions = entry.accesses.map((a) => a.action);
+        if (actions.some((a) => a.includes("createApprovalRequest")) && entry.name) {
+            // Extract approval request name from description like "* Created approval request: test"
+            const match = entry.description?.match(/(?:Created|Approved|Applied) approval request: (.+)/);
+            const approvalRequestName = match ? match[1].trim() : '';
+
+            if (approvalRequestName) {
+                // Use flag name + approval request name as unique identifier
+                const identifier = `${entry.name}:${approvalRequestName}`;
+                userApprovalRequests.add(identifier);
+            }
+        }
+    }
+
+    // If user didn't create any approval requests, return null
+    if (userApprovalRequests.size === 0) {
+        return null;
+    }
+
+    // Find who reviewed those approval requests
+    const reviewerCounts = new Map<string, number>();
+
+    for (const entry of allEntries) {
+        if (entry.member && entry.member._id !== userId) {
+            const actions = entry.accesses.map((a) => a.action);
+            if (actions.some((a) => a.includes("reviewApprovalRequest")) && entry.name) {
+                // Extract approval request name from description
+                const match = entry.description?.match(/(?:Created|Approved|Applied) approval request: (.+)/);
+                const approvalRequestName = match ? match[1].trim() : '';
+
+                if (approvalRequestName) {
+                    const identifier = `${entry.name}:${approvalRequestName}`;
+
+                    if (userApprovalRequests.has(identifier)) {
+                        const memberId = entry.member._id;
+                        reviewerCounts.set(
+                            memberId,
+                            (reviewerCounts.get(memberId) || 0) + 1,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Find the member with the most reviews
+    if (reviewerCounts.size === 0) {
+        return null;
+    }
+
+    let topReviewer: { memberId: string; count: number } | null = null;
+    for (const [memberId, count] of reviewerCounts.entries()) {
+        if (!topReviewer || count > topReviewer.count) {
+            topReviewer = { memberId, count };
+        }
+    }
+
+    if (!topReviewer) {
+        return null;
+    }
+
+    const member = memberCache.get(topReviewer.memberId);
+    if (!member) {
+        return null;
+    }
+
+    return {
+        memberId: member._id,
+        email: member.email,
+        name: `${member.firstName} ${member.lastName}`,
+        approvalsReviewed: topReviewer.count,
+    };
+}
+
 function calculateAchievements(
     userId: string,
     userStats: ChronicleStats,
@@ -971,17 +1075,22 @@ function calculateAchievements(
         environments: Set<string>;
         monthsActive: Set<number>;
         activityTypes: Set<string>;
-        approvalTotal: number;
-        approvalThroughProcess: number;
         guardedRollouts: number;
         experimentsCreated: number;
         aiConfigsCreated: number;
+        integrationsCreated: number;
+        flagLinksCreated: number;
+        flagsLinkedToViews: number;
+        polymathScore: number;
+        featureDays: Map<string, Set<string>>;
     }>();
 
     // Track first events of the year
     let firstFlagCreated: { memberId: string; date: number; flagName: string } | null = null;
     let firstFlagTurnedOn: { memberId: string; date: number; flagName: string } | null = null;
     let firstGuardedRollout: { memberId: string; date: number; flagName: string } | null = null;
+    let firstFlagArchived: { memberId: string; date: number; flagName: string } | null = null;
+    let firstExperimentCreated: { memberId: string; date: number; experimentName: string } | null = null;
 
     for (const entry of allEntries) {
         if (!entry.member) continue;
@@ -1003,11 +1112,14 @@ function calculateAchievements(
                 environments: new Set(),
                 monthsActive: new Set(),
                 activityTypes: new Set(),
-                approvalTotal: 0,
-                approvalThroughProcess: 0,
                 guardedRollouts: 0,
                 experimentsCreated: 0,
                 aiConfigsCreated: 0,
+                integrationsCreated: 0,
+                flagLinksCreated: 0,
+                flagsLinkedToViews: 0,
+                polymathScore: 0,
+                featureDays: new Map(),
             });
         }
 
@@ -1045,14 +1157,6 @@ function calculateAchievements(
             }
         }
 
-        // Track approvals
-        if (actions.some(a => a.includes("createApprovalRequest"))) {
-            stats.approvalTotal++;
-        }
-        if (actions.some(a => a.includes("reviewApprovalRequest"))) {
-            stats.approvalThroughProcess++;
-        }
-
         if (entry.kind === "flag") {
             if (actions.some((a) => a.includes("createFlag"))) {
                 stats.flagsCreated++;
@@ -1069,14 +1173,34 @@ function calculateAchievements(
 
             if (actions.some((a) => a.includes("updateGlobalArchived") || a.includes("deleteFlag"))) {
                 stats.flagsArchived++;
+                // Track first flag archived
+                if (!firstFlagArchived || entry.date < firstFlagArchived.date) {
+                    firstFlagArchived = {
+                        memberId,
+                        date: entry.date,
+                        flagName: entry.name || "Unknown",
+                    };
+                }
             }
 
-            // Track first flag turned on
+            // Track first flag turned on in critical environment
             if (
                 actions.some((a) => a === "updateOn") &&
                 entry.titleVerb?.startsWith("turned on")
             ) {
-                if (!firstFlagTurnedOn || entry.date < firstFlagTurnedOn.date) {
+                // Check if this is in a critical environment
+                let isCritical = false;
+                if (entry.target?.resources) {
+                    for (const resource of entry.target.resources) {
+                        const envMatch = resource.match(/env\/([^:]+)/);
+                        if (envMatch && envMatch[1].includes(';critical')) {
+                            isCritical = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (isCritical && (!firstFlagTurnedOn || entry.date < firstFlagTurnedOn.date)) {
                     firstFlagTurnedOn = {
                         memberId,
                         date: entry.date,
@@ -1102,6 +1226,14 @@ function calculateAchievements(
         if ((entry.kind === "experiment" || actions.some((a) => a.includes("createExperiment"))) &&
             actions.some((a) => a.includes("createExperiment"))) {
             stats.experimentsCreated++;
+            // Track first experiment created
+            if (!firstExperimentCreated || entry.date < firstExperimentCreated.date) {
+                firstExperimentCreated = {
+                    memberId,
+                    date: entry.date,
+                    experimentName: entry.name || "Unknown",
+                };
+            }
         }
 
         // Track AI configs created
@@ -1109,6 +1241,93 @@ function calculateAchievements(
             actions.some((a) => a.includes("createAIConfig"))) {
             stats.aiConfigsCreated++;
         }
+
+        // Track integrations created
+        if (actions.some((a) => a.includes("createIntegration"))) {
+            stats.integrationsCreated++;
+        }
+
+        // Track flag links created
+        if (actions.some((a) => a.includes("createFlagLink"))) {
+            stats.flagLinksCreated++;
+        }
+
+        // Track flags linked to views
+        if (actions.some((a) => a.includes("linkFlagToView"))) {
+            stats.flagsLinkedToViews++;
+        }
+
+        // Track feature-days for Polymath scoring
+        const dateStr = new Date(entry.date).toISOString().split('T')[0]; // YYYY-MM-DD
+        const featureDays = stats.featureDays;
+
+        // Determine which features were used in this entry
+        if (entry.kind === "flag" || actions.some(a => a.includes("Flag"))) {
+            if (!featureDays.has("flags")) featureDays.set("flags", new Set());
+            featureDays.get("flags")!.add(dateStr);
+        }
+        if (entry.kind === "experiment" || actions.some(a => a.includes("Experiment"))) {
+            if (!featureDays.has("experiments")) featureDays.set("experiments", new Set());
+            featureDays.get("experiments")!.add(dateStr);
+        }
+        if (entry.kind === "segment" || actions.some(a => a.includes("Segment"))) {
+            if (!featureDays.has("segments")) featureDays.set("segments", new Set());
+            featureDays.get("segments")!.add(dateStr);
+        }
+        if (entry.kind === "ai-config" || actions.some(a => a.includes("AIConfig"))) {
+            if (!featureDays.has("aiConfigs")) featureDays.set("aiConfigs", new Set());
+            featureDays.get("aiConfigs")!.add(dateStr);
+        }
+        if (actions.some(a => a.includes("Approval"))) {
+            if (!featureDays.has("approvals")) featureDays.set("approvals", new Set());
+            featureDays.get("approvals")!.add(dateStr);
+        }
+        if (actions.some(a => a.includes("ReleasePipeline"))) {
+            if (!featureDays.has("releasePipelines")) featureDays.set("releasePipelines", new Set());
+            featureDays.get("releasePipelines")!.add(dateStr);
+        }
+        if (actions.some(a => a.includes("createIntegration"))) {
+            if (!featureDays.has("integrations")) featureDays.set("integrations", new Set());
+            featureDays.get("integrations")!.add(dateStr);
+        }
+        if (actions.some(a => a.includes("MeasuredRollout"))) {
+            if (!featureDays.has("guardedRollouts")) featureDays.set("guardedRollouts", new Set());
+            featureDays.get("guardedRollouts")!.add(dateStr);
+        }
+        if (actions.some(a => a.includes("createFlagLink"))) {
+            if (!featureDays.has("flagLinks")) featureDays.set("flagLinks", new Set());
+            featureDays.get("flagLinks")!.add(dateStr);
+        }
+        if (actions.some(a => a.includes("linkFlagToView"))) {
+            if (!featureDays.has("viewLinks")) featureDays.set("viewLinks", new Set());
+            featureDays.get("viewLinks")!.add(dateStr);
+        }
+    }
+
+    // Calculate Polymath scores with weighted feature-days
+    const featureWeights = {
+        // Tier 1 - Advanced features (2.0x)
+        "experiments": 2.0,
+        "aiConfigs": 2.0,
+        "releasePipelines": 2.0,
+        "guardedRollouts": 2.0,
+        // Tier 2 - Intermediate features (1.5x)
+        "approvals": 1.5,
+        "integrations": 1.5,
+        "flagLinks": 1.5,
+        "viewLinks": 1.5,
+        // Tier 3 - Core features (1.0x)
+        "flags": 1.0,
+        "segments": 1.0,
+    };
+
+    for (const [memberId, stats] of memberStats.entries()) {
+        let totalScore = 0;
+        for (const [feature, days] of stats.featureDays.entries()) {
+            const weight = featureWeights[feature as keyof typeof featureWeights] || 1.0;
+            totalScore += days.size * weight;
+        }
+        stats.polymathScore = totalScore;
     }
 
     // Captain Cleanup - Most flags archived
@@ -1209,6 +1428,121 @@ function calculateAchievements(
             earned: true,
             rank: aiConfigsRank,
             value: userAIConfigs,
+        });
+    }
+
+    // Integrator - Most integrations created
+    const sortedByIntegrations = Array.from(memberStats.entries())
+        .map(([id, stats]) => [id, stats.integrationsCreated] as const)
+        .sort((a, b) => b[1] - a[1]);
+
+    const integrationsRank = sortedByIntegrations.findIndex(([id]) => id === userId) + 1;
+    const userIntegrations = sortedByIntegrations.find(([id]) => id === userId)?.[1] || 0;
+
+    if (integrationsRank === 1 && userIntegrations > 0) {
+        achievements.push({
+            name: "🔌 Integrator",
+            description: `Most integrations in your team (${userIntegrations} integrations)`,
+            earned: true,
+            rank: 1,
+            value: userIntegrations,
+        });
+    } else if (integrationsRank <= 3 && userIntegrations >= 3) {
+        achievements.push({
+            name: "🔌 Integration Pro",
+            description: `#${integrationsRank} most integrations (${userIntegrations})`,
+            earned: true,
+            rank: integrationsRank,
+            value: userIntegrations,
+        });
+    }
+
+    // LinkedIn - Most flag links created
+    const sortedByFlagLinks = Array.from(memberStats.entries())
+        .map(([id, stats]) => [id, stats.flagLinksCreated] as const)
+        .sort((a, b) => b[1] - a[1]);
+
+    const flagLinksRank = sortedByFlagLinks.findIndex(([id]) => id === userId) + 1;
+    const userFlagLinks = sortedByFlagLinks.find(([id]) => id === userId)?.[1] || 0;
+
+    if (flagLinksRank === 1 && userFlagLinks > 0) {
+        achievements.push({
+            name: "🔗 Link Master",
+            description: `Most flag links in your team (${userFlagLinks} links)`,
+            earned: true,
+            rank: 1,
+            value: userFlagLinks,
+        });
+    } else if (flagLinksRank <= 3 && userFlagLinks >= 5) {
+        achievements.push({
+            name: "🔗 Link Builder",
+            description: `#${flagLinksRank} most flag links (${userFlagLinks})`,
+            earned: true,
+            rank: flagLinksRank,
+            value: userFlagLinks,
+        });
+    }
+
+    // Visionary - Most flags linked to views
+    const sortedByViewLinks = Array.from(memberStats.entries())
+        .map(([id, stats]) => [id, stats.flagsLinkedToViews] as const)
+        .sort((a, b) => b[1] - a[1]);
+
+    const viewLinksRank = sortedByViewLinks.findIndex(([id]) => id === userId) + 1;
+    const userViewLinks = sortedByViewLinks.find(([id]) => id === userId)?.[1] || 0;
+
+    if (viewLinksRank === 1 && userViewLinks > 0) {
+        achievements.push({
+            name: "👁️ Visionary",
+            description: `Most flags linked to views in your team (${userViewLinks} flags)`,
+            earned: true,
+            rank: 1,
+            value: userViewLinks,
+        });
+    } else if (viewLinksRank <= 3 && userViewLinks >= 5) {
+        achievements.push({
+            name: "👁️ View Organizer",
+            description: `#${viewLinksRank} most flags linked to views (${userViewLinks})`,
+            earned: true,
+            rank: viewLinksRank,
+            value: userViewLinks,
+        });
+    }
+
+    // Polymath - Most features used most consistently (premium award)
+    const sortedByPolymath = Array.from(memberStats.entries())
+        .map(([id, stats]) => [id, stats.polymathScore] as const)
+        .sort((a, b) => b[1] - a[1]);
+
+    const polymathRank = sortedByPolymath.findIndex(([id]) => id === userId) + 1;
+    const userPolymathScore = sortedByPolymath.find(([id]) => id === userId)?.[1] || 0;
+    const userFeatureDays = memberStats.get(userId)?.featureDays;
+
+    if (polymathRank === 1 && userPolymathScore > 0) {
+        // Calculate feature breakdown for description
+        const featureCount = userFeatureDays?.size || 0;
+        const topFeatures = userFeatureDays ?
+            Array.from(userFeatureDays.entries())
+                .sort((a, b) => b[1].size - a[1].size)
+                .slice(0, 3)
+                .map(([feature, days]) => `${feature} (${days.size} days)`)
+                .join(", ") : "";
+
+        achievements.push({
+            name: "🌟 Polymath",
+            description: `Mastered the most features most consistently! Score: ${Math.round(userPolymathScore)} across ${featureCount} features. Top: ${topFeatures}`,
+            earned: true,
+            rank: 1,
+            value: Math.round(userPolymathScore),
+        });
+    } else if (polymathRank <= 3 && userPolymathScore >= 10) {
+        const featureCount = userFeatureDays?.size || 0;
+        achievements.push({
+            name: "⭐ Feature Explorer",
+            description: `#${polymathRank} in feature mastery (Score: ${Math.round(userPolymathScore)} across ${featureCount} features)`,
+            earned: true,
+            rank: polymathRank,
+            value: Math.round(userPolymathScore),
         });
     }
 
@@ -1326,6 +1660,23 @@ function calculateAchievements(
         });
     }
 
+    // Bot Master - High AI activity
+    if (userStats.insights.aiActions >= 100) {
+        achievements.push({
+            name: "🤖 Bot Master",
+            description: `${userStats.insights.aiActions} actions on AI Configs and tools`,
+            earned: true,
+            value: userStats.insights.aiActions,
+        });
+    } else if (userStats.insights.aiActions >= 50) {
+        achievements.push({
+            name: "🤖 Bot Whisperer",
+            description: `${userStats.insights.aiActions} actions on AI Configs and tools`,
+            earned: true,
+            value: userStats.insights.aiActions,
+        });
+    }
+
     // Segment Master
     if (userStats.segmentsCreated >= 50) {
         achievements.push({
@@ -1407,22 +1758,7 @@ function calculateAchievements(
         });
     }
 
-    // Night Owl / Early Bird / Weekend Warrior
-    if (userStats.insights.nightOwl) {
-        achievements.push({
-            name: "🦉 Night Owl",
-            description: "More than 20% of activity between 10 PM - 4 AM",
-            earned: true,
-        });
-    }
-
-    if (userStats.insights.earlyBird) {
-        achievements.push({
-            name: "🌅 Early Bird",
-            description: "More than 15% of activity between 5 AM - 8 AM",
-            earned: true,
-        });
-    }
+    // Weekend Warrior
 
     if (userStats.insights.weekendWarrior) {
         achievements.push({
@@ -1456,10 +1792,30 @@ function calculateAchievements(
     if (firstGuardedRollout && firstGuardedRollout.memberId === userId) {
         const date = new Date(firstGuardedRollout.date);
         achievements.push({
-            name: "🛡️ Safety First",
+            name: "🛡️ First Guardian",
             description: `First guarded rollout of the year: "${firstGuardedRollout.flagName}" on ${date.toLocaleDateString()}`,
             earned: true,
             value: firstGuardedRollout.flagName,
+        });
+    }
+
+    if (firstFlagArchived && firstFlagArchived.memberId === userId) {
+        const date = new Date(firstFlagArchived.date);
+        achievements.push({
+            name: "🗑️ First Cleanup",
+            description: `First flag archived in the year: "${firstFlagArchived.flagName}" on ${date.toLocaleDateString()}`,
+            earned: true,
+            value: firstFlagArchived.flagName,
+        });
+    }
+
+    if (firstExperimentCreated && firstExperimentCreated.memberId === userId) {
+        const date = new Date(firstExperimentCreated.date);
+        achievements.push({
+            name: "🧪 First Experiment",
+            description: `First experiment created in the year: "${firstExperimentCreated.experimentName}" on ${date.toLocaleDateString()}`,
+            earned: true,
+            value: firstExperimentCreated.experimentName,
         });
     }
 
@@ -1620,27 +1976,6 @@ function calculateAchievements(
         });
     }
 
-    // By the Book vs High Roller
-    const approvalRatio = userMemberStats.approvalTotal > 0
-        ? userMemberStats.approvalThroughProcess / userMemberStats.approvalTotal
-        : 0;
-
-    if (approvalRatio >= 0.8 && userMemberStats.approvalTotal >= 20) {
-        achievements.push({
-            name: "📋 By the Book",
-            description: `${Math.round(approvalRatio * 100)}% of changes through approvals`,
-            earned: true,
-            value: `${Math.round(approvalRatio * 100)}%`,
-        });
-    } else if (approvalRatio <= 0.2 && userMemberStats.approvalTotal >= 20) {
-        achievements.push({
-            name: "🎲 High Roller",
-            description: `${Math.round((1 - approvalRatio) * 100)}% of changes bypassed approvals`,
-            earned: true,
-            value: `${Math.round((1 - approvalRatio) * 100)}%`,
-        });
-    }
-
     // Steady Hand - Low rollback rate
     if (userStats.flagsCreated >= 50 && userStats.oops) {
         const rollbackRate = userStats.oops.totalRollbacks / userStats.flagsCreated;
@@ -1763,6 +2098,14 @@ function generateChronicleReportForMember(
 
     // Find collaborators
     const collaborators = findCollaborators(
+        userEntries,
+        allEntries,
+        member._id,
+        memberCache,
+    );
+
+    // Find approval buddy
+    stats.insights.approvalBuddy = findApprovalBuddy(
         userEntries,
         allEntries,
         member._id,
@@ -1944,6 +2287,15 @@ export async function generateChronicleReport(
     // Find collaborators
     console.error("Finding collaborators...");
     const collaborators = findCollaborators(
+        userEntries,
+        allEntries,
+        caller._id,
+        memberCache,
+    );
+
+    // Find approval buddy
+    console.error("Finding approval buddy...");
+    stats.insights.approvalBuddy = findApprovalBuddy(
         userEntries,
         allEntries,
         caller._id,

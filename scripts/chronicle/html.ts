@@ -281,7 +281,7 @@ function generateHTML(report: ChronicleReport): string {
         </div>
 
         <!-- Rank -->
-        ${rankings.flagsCreated.rank <= 3 ? `
+        ${rankings.flagsCreated.rank <= 3 && stats.flagsCreated > 0 ? `
         <div class="slide">
             <h2>You ranked</h2>
             <div class="rank-badge">#${rankings.flagsCreated.rank}</div>
@@ -374,6 +374,43 @@ function generateHTML(report: ChronicleReport): string {
         </div>
         ` : ''}
 
+        <!-- Approval Buddy -->
+        ${stats.insights?.approvalBuddy ? `
+        <div class="slide">
+            <h2>✅ Your Approval Buddy</h2>
+            <div class="big-stat" style="font-size: 6rem;">${stats.insights.approvalBuddy.name}</div>
+            <p class="stat-label">Your Go-To Reviewer</p>
+            <p style="margin-top: 2rem; font-size: 1.3rem; opacity: 0.9;">
+                Reviewed <strong>${stats.insights.approvalBuddy.approvalsReviewed}</strong> of your approval requests
+            </p>
+        </div>
+        ` : ''}
+
+        <!-- Polymath Achievement - Special Animated Slide -->
+        ${achievements.some(a => a.name.includes('🌟 Polymath')) ? `
+        <div class="slide polymath-award-slide">
+            <div class="polymath-confetti"></div>
+            <div class="polymath-confetti"></div>
+            <div class="polymath-confetti"></div>
+            <div class="polymath-confetti"></div>
+            <div class="polymath-confetti"></div>
+            <div class="polymath-confetti"></div>
+            <div class="polymath-confetti"></div>
+            <div class="polymath-confetti"></div>
+            <div class="polymath-confetti"></div>
+            <h1 style="font-size: 3rem; margin-bottom: 2rem; position: relative; z-index: 1;">🌟 You are the Polymath! 🌟</h1>
+            <div class="big-stat" style="position: relative; z-index: 1;">${(() => {
+                const polymathAch = achievements.find(a => a.name.includes('Polymath'));
+                return polymathAch?.value || 0;
+            })()}</div>
+            <p class="stat-label" style="position: relative; z-index: 1;">Platform Mastery Points</p>
+            <p style="font-size: 1.1rem; opacity: 0.8; margin-top: 0.5rem; position: relative; z-index: 1;">(Breadth × Consistency)</p>
+            <p style="margin-top: 2rem; font-size: 1.3rem; max-width: 700px; margin-left: auto; margin-right: auto; opacity: 0.95; position: relative; z-index: 1;">
+                You've mastered the LaunchDarkly platform with exceptional breadth and consistency, using advanced features like Experimentation, AI Configs, and Release Pipelines alongside core capabilities.
+            </p>
+        </div>
+        ` : ''}
+
         <!-- Achievements -->
         ${achievements.length > 0 ? `
         <div class="slide">
@@ -425,8 +462,6 @@ function generateHTML(report: ChronicleReport): string {
                     <div class="label">Production Changes</div>
                 </div>
             </div>
-            ${stats.insights.nightOwl ? '<p style="margin-top: 2rem; font-size: 1.5rem;">🦉 Night Owl - You work late!</p>' : ''}
-            ${stats.insights.earlyBird ? '<p style="margin-top: 2rem; font-size: 1.5rem;">🌅 Early Bird - You start early!</p>' : ''}
             ${stats.insights.weekendWarrior ? '<p style="margin-top: 2rem; font-size: 1.5rem;">⚔️ Weekend Warrior - You work weekends!</p>' : ''}
             ${stats.insights.cleanupCrew ? '<p style="margin-top: 2rem; font-size: 1.5rem;">🧹 Cleanup Crew - You keep things tidy!</p>' : ''}
         </div>
@@ -525,6 +560,55 @@ function generateHTML(report: ChronicleReport): string {
         document.querySelectorAll('.slide').forEach(slide => {
             slide.style.scrollSnapAlign = 'start';
         });
+
+        // Count-up animation for big-stat numbers
+        function animateNumber(element, start, end, duration) {
+            const startTime = performance.now();
+            const hasComma = element.textContent.includes(',');
+
+            function update(currentTime) {
+                const elapsed = currentTime - startTime;
+                const progress = Math.min(elapsed / duration, 1);
+
+                // Easing function (ease-out)
+                const easeOut = 1 - Math.pow(1 - progress, 3);
+                const current = Math.floor(start + (end - start) * easeOut);
+
+                // Format with commas if original had them
+                element.textContent = hasComma ? current.toLocaleString() : current;
+
+                if (progress < 1) {
+                    requestAnimationFrame(update);
+                }
+            }
+
+            requestAnimationFrame(update);
+        }
+
+        // Observe slides and animate big-stat numbers when they come into view
+        const animatedStats = new Set();
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting && !animatedStats.has(entry.target)) {
+                    const bigStat = entry.target.querySelector('.big-stat');
+                    if (bigStat && !bigStat.dataset.animated) {
+                        const text = bigStat.textContent.trim();
+                        const number = parseInt(text.replace(/,/g, ''), 10);
+
+                        if (!isNaN(number) && number > 0) {
+                            bigStat.dataset.animated = 'true';
+                            animateNumber(bigStat, 0, number, 1500);
+                        }
+                    }
+                    animatedStats.add(entry.target);
+                }
+            });
+        }, { threshold: 0.5 });
+
+        // Observe all slides
+        document.querySelectorAll('.slide').forEach(slide => {
+            observer.observe(slide);
+        });
     </script>
 </body>
 </html>`;
@@ -559,6 +643,18 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
             return r.stats.oops!.fastestSeconds < min.stats.oops!.fastestSeconds ? r : min;
         }, reports.find(r => r.stats.oops)),
         fridayFlipper: reports.reduce((max, r) => r.stats.insights.fridayActions > (max?.stats.insights.fridayActions || 0) ? r : max, reports[0]),
+        botMaster: reports.reduce((max, r) => r.stats.insights.aiActions > (max?.stats.insights.aiActions || 0) ? r : max, reports[0]),
+        integrator: reports.reduce((max, r) => r.stats.integrationsCreated > (max?.stats.integrationsCreated || 0) ? r : max, reports[0]),
+        linkMaster: reports.reduce((max, r) => r.stats.flagLinksCreated > (max?.stats.flagLinksCreated || 0) ? r : max, reports[0]),
+        visionary: reports.reduce((max, r) => r.stats.flagsLinkedToViews > (max?.stats.flagsLinkedToViews || 0) ? r : max, reports[0]),
+        // Premium award - Polymath (find who has the Polymath achievement)
+        polymath: reports.find(r => r.achievements.some(a => a.name.includes('Polymath'))),
+        // First achievements - find who has these specific achievements
+        firstLight: reports.find(r => r.achievements.some(a => a.name.includes('First Light'))),
+        firstFlag: reports.find(r => r.achievements.some(a => a.name.includes('First Flag of the Year'))),
+        firstCleanup: reports.find(r => r.achievements.some(a => a.name.includes('First Cleanup'))),
+        firstGuardian: reports.find(r => r.achievements.some(a => a.name.includes('First Guardian'))),
+        firstExperiment: reports.find(r => r.achievements.some(a => a.name.includes('First Experiment'))),
     };
 
     return `<!DOCTYPE html>
@@ -907,12 +1003,225 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
             display: none;
         }
 
+        /* Polymath Spotlight Styles */
+        .polymath-spotlight {
+            background: linear-gradient(135deg, rgba(255, 215, 0, 0.3) 0%, rgba(255, 165, 0, 0.2) 100%);
+            backdrop-filter: blur(15px);
+            border-radius: 25px;
+            padding: 3rem;
+            margin: 2rem auto 3rem;
+            max-width: 900px;
+            border: 3px solid rgba(255, 215, 0, 0.5);
+            box-shadow: 0 20px 60px rgba(255, 215, 0, 0.3);
+            text-align: center;
+            animation: spotlightGlow 3s ease-in-out infinite;
+        }
+
+        @keyframes spotlightGlow {
+            0%, 100% { box-shadow: 0 20px 60px rgba(255, 215, 0, 0.3); }
+            50% { box-shadow: 0 20px 80px rgba(255, 215, 0, 0.5); }
+        }
+
+        .polymath-spotlight .title {
+            font-size: 2.5rem;
+            font-weight: 900;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+        }
+
+        .polymath-spotlight .star-icon {
+            font-size: 3.5rem;
+            animation: starRotate 4s linear infinite;
+        }
+
+        @keyframes starRotate {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .polymath-spotlight .winner-name {
+            font-size: 3rem;
+            font-weight: 900;
+            margin-bottom: 1rem;
+            color: #FFD700;
+            text-shadow: 0 2px 10px rgba(255, 215, 0, 0.5);
+        }
+
+        .polymath-spotlight .score {
+            font-size: 4rem;
+            font-weight: 900;
+            margin: 1.5rem 0;
+            color: #fff;
+        }
+
+        .polymath-spotlight .description {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            line-height: 1.6;
+        }
+
+        /* Confetti/Sparkle Animation for Individual Slide */
+        .polymath-award-slide {
+            position: relative;
+            overflow: hidden;
+        }
+
+        .polymath-award-slide::before,
+        .polymath-award-slide::after {
+            content: '✨';
+            position: absolute;
+            font-size: 2rem;
+            opacity: 0;
+            animation: sparkleFloat 3s ease-in-out infinite;
+        }
+
+        .polymath-award-slide::before {
+            top: 10%;
+            left: 10%;
+            animation-delay: 0s;
+        }
+
+        .polymath-award-slide::after {
+            top: 15%;
+            right: 10%;
+            animation-delay: 1.5s;
+        }
+
+        @keyframes sparkleFloat {
+            0% {
+                opacity: 0;
+                transform: translateY(0) scale(0.5);
+            }
+            50% {
+                opacity: 1;
+                transform: translateY(-20px) scale(1);
+            }
+            100% {
+                opacity: 0;
+                transform: translateY(-40px) scale(0.5);
+            }
+        }
+
+        .polymath-award-slide .big-stat {
+            background: linear-gradient(135deg, #FFD700 0%, #FFA500 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: shimmer 2s ease-in-out infinite, gentlePulse 3s ease-in-out infinite;
+        }
+
+        @keyframes shimmer {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.85; }
+        }
+
+        @keyframes gentlePulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        /* Confetti particles background */
+        .polymath-confetti {
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            background: #FFD700;
+            opacity: 0;
+            animation: confettiFall 4s ease-in-out infinite;
+            border-radius: 50%;
+        }
+
+        .polymath-confetti:nth-child(1) { left: 10%; animation-delay: 0s; background: #FFD700; }
+        .polymath-confetti:nth-child(2) { left: 20%; animation-delay: 0.5s; background: #FFA500; }
+        .polymath-confetti:nth-child(3) { left: 30%; animation-delay: 1s; background: #FF69B4; }
+        .polymath-confetti:nth-child(4) { left: 40%; animation-delay: 1.5s; background: #87CEEB; }
+        .polymath-confetti:nth-child(5) { left: 50%; animation-delay: 2s; background: #FFD700; }
+        .polymath-confetti:nth-child(6) { left: 60%; animation-delay: 2.5s; background: #FFA500; }
+        .polymath-confetti:nth-child(7) { left: 70%; animation-delay: 3s; background: #FF69B4; }
+        .polymath-confetti:nth-child(8) { left: 80%; animation-delay: 3.5s; background: #87CEEB; }
+        .polymath-confetti:nth-child(9) { left: 90%; animation-delay: 0.8s; background: #FFD700; }
+
+        @keyframes confettiFall {
+            0% {
+                top: -10%;
+                opacity: 0;
+                transform: rotate(0deg);
+            }
+            10% {
+                opacity: 0.8;
+            }
+            90% {
+                opacity: 0.8;
+            }
+            100% {
+                top: 110%;
+                opacity: 0;
+                transform: rotate(720deg);
+            }
+        }
+
+        .feature-breakdown {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 2rem;
+            margin-top: 2rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .feature-bar {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1rem;
+            gap: 1rem;
+        }
+
+        .feature-bar .label {
+            flex: 0 0 150px;
+            text-align: right;
+            font-weight: 600;
+            opacity: 0.9;
+        }
+
+        .feature-bar .bar {
+            flex: 1;
+            height: 25px;
+            background: linear-gradient(90deg, rgba(255, 215, 0, 0.8) 0%, rgba(255, 215, 0, 0.3) 100%);
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .feature-bar .bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            animation: barShine 2s infinite;
+        }
+
+        @keyframes barShine {
+            to { left: 100%; }
+        }
+
         @media (max-width: 768px) {
             .slide h1 { font-size: 2.5rem; }
             .slide h2 { font-size: 2rem; }
             .big-stat { font-size: 5rem; }
             .stats-grid { grid-template-columns: 1fr; }
             .achievement-grid { grid-template-columns: 1fr; }
+            .polymath-spotlight { padding: 2rem; }
+            .polymath-spotlight .title { font-size: 1.8rem; }
+            .polymath-spotlight .winner-name { font-size: 2rem; }
+            .polymath-spotlight .score { font-size: 3rem; }
         }
     </style>
 </head>
@@ -926,9 +1235,38 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
             <div style="margin: 3rem 0;">
                 <h2 style="font-size: 2rem; font-weight: 800; margin-bottom: 2rem; text-align: center;">🏆 Team Awards</h2>
 
+                <!-- Polymath Spotlight - Premium Award -->
+                ${teamLeaders.polymath ? `
+                <div class="polymath-spotlight">
+                    <div class="title">
+                        <span class="star-icon">🌟</span>
+                        <span>Platform Polymath</span>
+                        <span class="star-icon">🌟</span>
+                    </div>
+                    <div class="winner-name">${teamLeaders.polymath.user.firstName} ${teamLeaders.polymath.user.lastName}</div>
+                    <div class="score">${(() => {
+                        const achievement = teamLeaders.polymath.achievements.find(a => a.name.includes('Polymath'));
+                        return achievement?.value || 0;
+                    })()}</div>
+                    <div class="stat-label">Platform Mastery Points</div>
+                    <p style="font-size: 1rem; opacity: 0.8; margin-top: 0.5rem;">(Breadth × Consistency across 10+ features)</p>
+                    <div class="description" style="margin-top: 1.5rem;">
+                        ${(() => {
+                            const achievement = teamLeaders.polymath.achievements.find(a => a.name.includes('Polymath'));
+                            if (achievement?.description) {
+                                // Extract just the top features part
+                                const match = achievement.description.match(/Top: (.+)$/);
+                                return match ? match[1] : 'Mastered the platform with exceptional breadth and consistency';
+                            }
+                            return 'Mastered the platform with exceptional breadth and consistency';
+                        })()}
+                    </div>
+                </div>
+                ` : ''}
+
                 <div class="achievement-grid" style="max-width: 900px; margin: 0 auto;">
                     <div class="achievement-card">
-                        <div class="emoji">🚩</div>
+                        <div class="emoji">💯</div>
                         <div class="name">Most Flags Created</div>
                         <div class="description">
                             <strong>${teamLeaders.flagsCreated.user.firstName} ${teamLeaders.flagsCreated.user.lastName}</strong>
@@ -964,7 +1302,7 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
                     </div>
 
                     <div class="achievement-card">
-                        <div class="emoji">✅</div>
+                        <div class="emoji">🛡️</div>
                         <div class="name">Governance Guru</div>
                         <div class="description">
                             <strong>${teamLeaders.approvalsReviewed.user.firstName} ${teamLeaders.approvalsReviewed.user.lastName}</strong>
@@ -1017,6 +1355,120 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
                         <div class="description">
                             <strong>${teamLeaders.fridayFlipper.user.firstName} ${teamLeaders.fridayFlipper.user.lastName}</strong>
                             <br>${formatNumber(teamLeaders.fridayFlipper.stats.insights.fridayActions)} Friday actions
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.firstLight ? `
+                    <div class="achievement-card">
+                        <div class="emoji">💡</div>
+                        <div class="name">First Light</div>
+                        <div class="description">
+                            <strong>${teamLeaders.firstLight.user.firstName} ${teamLeaders.firstLight.user.lastName}</strong>
+                            <br>${(() => {
+                                const ach = teamLeaders.firstLight.achievements.find(a => a.name.includes('First Light'));
+                                return ach?.description || 'Turned on the first flag in production';
+                            })()}
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.firstFlag ? `
+                    <div class="achievement-card">
+                        <div class="emoji">🎉</div>
+                        <div class="name">First Flag</div>
+                        <div class="description">
+                            <strong>${teamLeaders.firstFlag.user.firstName} ${teamLeaders.firstFlag.user.lastName}</strong>
+                            <br>${(() => {
+                                const ach = teamLeaders.firstFlag.achievements.find(a => a.name.includes('First Flag of the Year'));
+                                return ach?.description?.split(': ')[1] || 'First flag created';
+                            })()}
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.firstCleanup ? `
+                    <div class="achievement-card">
+                        <div class="emoji">🗑️</div>
+                        <div class="name">First Cleanup</div>
+                        <div class="description">
+                            <strong>${teamLeaders.firstCleanup.user.firstName} ${teamLeaders.firstCleanup.user.lastName}</strong>
+                            <br>${(() => {
+                                const ach = teamLeaders.firstCleanup.achievements.find(a => a.name.includes('First Cleanup'));
+                                return ach?.description?.split(': ')[1] || 'First flag archived';
+                            })()}
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.firstGuardian ? `
+                    <div class="achievement-card">
+                        <div class="emoji">🛡️</div>
+                        <div class="name">First Guardian</div>
+                        <div class="description">
+                            <strong>${teamLeaders.firstGuardian.user.firstName} ${teamLeaders.firstGuardian.user.lastName}</strong>
+                            <br>${(() => {
+                                const ach = teamLeaders.firstGuardian.achievements.find(a => a.name.includes('First Guardian'));
+                                return ach?.description?.split(': ')[1] || 'First guarded rollout';
+                            })()}
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.firstExperiment ? `
+                    <div class="achievement-card">
+                        <div class="emoji">🧪</div>
+                        <div class="name">First Experiment</div>
+                        <div class="description">
+                            <strong>${teamLeaders.firstExperiment.user.firstName} ${teamLeaders.firstExperiment.user.lastName}</strong>
+                            <br>${(() => {
+                                const ach = teamLeaders.firstExperiment.achievements.find(a => a.name.includes('First Experiment'));
+                                return ach?.description?.split(': ')[1] || 'First experiment created';
+                            })()}
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.botMaster.stats.insights.aiActions > 0 ? `
+                    <div class="achievement-card">
+                        <div class="emoji">🤖</div>
+                        <div class="name">Bot Master</div>
+                        <div class="description">
+                            <strong>${teamLeaders.botMaster.user.firstName} ${teamLeaders.botMaster.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.botMaster.stats.insights.aiActions)} AI actions
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.integrator.stats.integrationsCreated > 0 ? `
+                    <div class="achievement-card">
+                        <div class="emoji">🔌</div>
+                        <div class="name">Integrator</div>
+                        <div class="description">
+                            <strong>${teamLeaders.integrator.user.firstName} ${teamLeaders.integrator.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.integrator.stats.integrationsCreated)} integrations
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.linkMaster.stats.flagLinksCreated > 0 ? `
+                    <div class="achievement-card">
+                        <div class="emoji">🔗</div>
+                        <div class="name">Link Master</div>
+                        <div class="description">
+                            <strong>${teamLeaders.linkMaster.user.firstName} ${teamLeaders.linkMaster.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.linkMaster.stats.flagLinksCreated)} flag links
+                        </div>
+                    </div>
+                    ` : ''}
+
+                    ${teamLeaders.visionary.stats.flagsLinkedToViews > 0 ? `
+                    <div class="achievement-card">
+                        <div class="emoji">👁️</div>
+                        <div class="name">Visionary</div>
+                        <div class="description">
+                            <strong>${teamLeaders.visionary.user.firstName} ${teamLeaders.visionary.user.lastName}</strong>
+                            <br>${formatNumber(teamLeaders.visionary.stats.flagsLinkedToViews)} flags linked to views
                         </div>
                     </div>
                     ` : ''}
@@ -1162,7 +1614,7 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
                 </div>
 
                 <!-- Rank -->
-                \${rankings.flagsCreated.rank <= 3 ? \`
+                \${rankings.flagsCreated.rank <= 3 && stats.flagsCreated > 0 ? \`
                 <div class="slide">
                     <h2>You ranked</h2>
                     <div class="rank-badge">#\${rankings.flagsCreated.rank}</div>
@@ -1255,6 +1707,43 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
                 </div>
                 \` : ''}
 
+                <!-- Approval Buddy -->
+                \${stats.insights?.approvalBuddy ? \`
+                <div class="slide">
+                    <h2>✅ Your Approval Buddy</h2>
+                    <div class="big-stat" style="font-size: 6rem;">\${stats.insights.approvalBuddy.name}</div>
+                    <p class="stat-label">Your Go-To Reviewer</p>
+                    <p style="margin-top: 2rem; font-size: 1.3rem; opacity: 0.9;">
+                        Reviewed <strong>\${stats.insights.approvalBuddy.approvalsReviewed}</strong> of your approval requests
+                    </p>
+                </div>
+                \` : ''}
+
+                <!-- Polymath Achievement - Special Animated Slide -->
+                \${achievements.some(a => a.name.includes('🌟 Polymath')) ? \`
+                <div class="slide polymath-award-slide">
+                    <div class="polymath-confetti"></div>
+                    <div class="polymath-confetti"></div>
+                    <div class="polymath-confetti"></div>
+                    <div class="polymath-confetti"></div>
+                    <div class="polymath-confetti"></div>
+                    <div class="polymath-confetti"></div>
+                    <div class="polymath-confetti"></div>
+                    <div class="polymath-confetti"></div>
+                    <div class="polymath-confetti"></div>
+                    <h1 style="font-size: 3rem; margin-bottom: 2rem; position: relative; z-index: 1;">🌟 You are the Polymath! 🌟</h1>
+                    <div class="big-stat" style="position: relative; z-index: 1;">\${(() => {
+                        const polymathAch = achievements.find(a => a.name.includes('Polymath'));
+                        return polymathAch?.value || 0;
+                    })()}</div>
+                    <p class="stat-label" style="position: relative; z-index: 1;">Platform Mastery Points</p>
+                    <p style="font-size: 1.1rem; opacity: 0.8; margin-top: 0.5rem; position: relative; z-index: 1;">(Breadth × Consistency)</p>
+                    <p style="margin-top: 2rem; font-size: 1.3rem; max-width: 700px; margin-left: auto; margin-right: auto; opacity: 0.95; position: relative; z-index: 1;">
+                        You've mastered the LaunchDarkly platform with exceptional breadth and consistency, using advanced features like Experimentation, AI Configs, and Release Pipelines alongside core capabilities.
+                    </p>
+                </div>
+                \` : ''}
+
                 <!-- Achievements -->
                 \${achievements.length > 0 ? \`
                 <div class="slide">
@@ -1303,8 +1792,6 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
                             <div class="label">Production Changes</div>
                         </div>
                     </div>
-                    \${stats.insights.nightOwl ? '<p style="margin-top: 2rem; font-size: 1.5rem;">🦉 Night Owl - You work late!</p>' : ''}
-                    \${stats.insights.earlyBird ? '<p style="margin-top: 2rem; font-size: 1.5rem;">🌅 Early Bird - You start early!</p>' : ''}
                     \${stats.insights.weekendWarrior ? '<p style="margin-top: 2rem; font-size: 1.5rem;">⚔️ Weekend Warrior - You work weekends!</p>' : ''}
                     \${stats.insights.cleanupCrew ? '<p style="margin-top: 2rem; font-size: 1.5rem;">🧹 Cleanup Crew - You keep things tidy!</p>' : ''}
                 </div>
@@ -1391,6 +1878,55 @@ function generateMultiMemberHTML(reports: ChronicleReport[]): string {
                     e.preventDefault();
                     slides[slides.length - 1].scrollIntoView({ behavior: 'smooth' });
                 }
+            });
+
+            // Count-up animation for big-stat numbers
+            function animateNumber(element, start, end, duration) {
+                const startTime = performance.now();
+                const hasComma = element.textContent.includes(',');
+
+                function update(currentTime) {
+                    const elapsed = currentTime - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+
+                    // Easing function (ease-out)
+                    const easeOut = 1 - Math.pow(1 - progress, 3);
+                    const current = Math.floor(start + (end - start) * easeOut);
+
+                    // Format with commas if original had them
+                    element.textContent = hasComma ? current.toLocaleString() : current;
+
+                    if (progress < 1) {
+                        requestAnimationFrame(update);
+                    }
+                }
+
+                requestAnimationFrame(update);
+            }
+
+            // Observe slides and animate big-stat numbers when they come into view
+            const animatedStats = new Set();
+            const observer = new IntersectionObserver((entries) => {
+                entries.forEach(entry => {
+                    if (entry.isIntersecting && !animatedStats.has(entry.target)) {
+                        const bigStat = entry.target.querySelector('.big-stat');
+                        if (bigStat && !bigStat.dataset.animated) {
+                            const text = bigStat.textContent.trim();
+                            const number = parseInt(text.replace(/,/g, ''), 10);
+
+                            if (!isNaN(number) && number > 0) {
+                                bigStat.dataset.animated = 'true';
+                                animateNumber(bigStat, 0, number, 1500);
+                            }
+                        }
+                        animatedStats.add(entry.target);
+                    }
+                });
+            }, { threshold: 0.5 });
+
+            // Observe all slides
+            document.querySelectorAll('.slide').forEach(slide => {
+                observer.observe(slide);
             });
         }
 
