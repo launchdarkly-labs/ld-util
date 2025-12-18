@@ -167,3 +167,191 @@ The script outputs one JSON object per line (NDJSON format):
 ```
 
 This format is ideal for streaming processing and can be easily parsed line-by-line or imported into tools like `jq`.
+
+## Processing with jq
+
+You can pipe the NDJSON output to `jq` for analysis and calculations.
+
+### Calculate Average Approval Times
+
+Calculate the average time between request creation and approval:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts | \
+jq -s '
+  map(
+    select(.reviewStatus == "approved" and .allReviews != null) |
+    {
+      timeToApprove: (
+        (.allReviews[] | select(.kind == "approve") | .creationDate) - .creationDate
+      )
+    }
+  ) |
+  {
+    avgTimeToApproveMs: (map(.timeToApprove) | add / length),
+    avgTimeToApproveHours: (map(.timeToApprove) | add / length / 1000 / 60 / 60),
+    avgTimeToApproveDays: (map(.timeToApprove) | add / length / 1000 / 60 / 60 / 24),
+    count: length
+  }
+'
+```
+
+Calculate the average time between approval and when changes were applied:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts | \
+jq -s '
+  map(
+    select(.status == "completed" and .reviewStatus == "approved" and .appliedDate != null and .allReviews != null) |
+    {
+      timeToApply: (
+        .appliedDate - (.allReviews[] | select(.kind == "approve") | .creationDate)
+      )
+    }
+  ) |
+  {
+    avgTimeToApplyMs: (map(.timeToApply) | add / length),
+    avgTimeToApplyHours: (map(.timeToApply) | add / length / 1000 / 60 / 60),
+    avgTimeToApplyDays: (map(.timeToApply) | add / length / 1000 / 60 / 60 / 24),
+    count: length
+  }
+'
+```
+
+Calculate both metrics in one pass:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts | \
+jq -s '
+  {
+    timeToApprove: map(
+      select(.reviewStatus == "approved" and .allReviews != null) |
+      (.allReviews[] | select(.kind == "approve") | .creationDate) - .creationDate
+    ),
+    timeToApply: map(
+      select(.status == "completed" and .reviewStatus == "approved" and .appliedDate != null and .allReviews != null) |
+      .appliedDate - (.allReviews[] | select(.kind == "approve") | .creationDate)
+    )
+  } |
+  {
+    avgTimeToApprove: {
+      hours: (.timeToApprove | add / length / 1000 / 60 / 60),
+      days: (.timeToApprove | add / length / 1000 / 60 / 60 / 24),
+      count: (.timeToApprove | length)
+    },
+    avgTimeToApply: {
+      hours: (.timeToApply | add / length / 1000 / 60 / 60),
+      days: (.timeToApply | add / length / 1000 / 60 / 60 / 24),
+      count: (.timeToApply | length)
+    }
+  }
+'
+```
+
+### Break Down Metrics by Project/Environment
+
+Calculate average approval times grouped by project:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts --expand project | \
+jq -s 'group_by(.project.key) | map({
+  project: .[0].project.name,
+  projectKey: .[0].project.key,
+  avgTimeToApproveHours: (
+    map(
+      select(.reviewStatus == "approved" and .allReviews != null) |
+      ((.allReviews[] | select(.kind == "approve") | .creationDate) - .creationDate)
+    ) |
+    if length > 0 then add / length / 1000 / 60 / 60 else null end
+  ),
+  avgTimeToApplyHours: (
+    map(
+      select(.status == "completed" and .reviewStatus == "approved" and .appliedDate != null and .allReviews != null) |
+      .appliedDate - (.allReviews[] | select(.kind == "approve") | .creationDate)
+    ) |
+    if length > 0 then add / length / 1000 / 60 / 60 else null end
+  ),
+  totalRequests: length,
+  approvedCount: map(select(.reviewStatus == "approved")) | length,
+  completedCount: map(select(.status == "completed")) | length
+}) | sort_by(-.totalRequests)'
+```
+
+Calculate average approval times grouped by environment:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts --expand environments | \
+jq -s 'map(select(.environments != null) | . as $req | .environments[] | {
+  env: .,
+  req: $req
+}) | group_by(.env.key) | map({
+  environment: .[0].env.name,
+  envKey: .[0].env.key,
+  avgTimeToApproveHours: (
+    map(.req | select(.reviewStatus == "approved" and .allReviews != null) |
+      ((.allReviews[] | select(.kind == "approve") | .creationDate) - .creationDate)
+    ) |
+    if length > 0 then add / length / 1000 / 60 / 60 else null end
+  ),
+  avgTimeToApplyHours: (
+    map(.req | select(.status == "completed" and .reviewStatus == "approved" and .appliedDate != null and .allReviews != null) |
+      .appliedDate - (.allReviews[] | select(.kind == "approve") | .creationDate)
+    ) |
+    if length > 0 then add / length / 1000 / 60 / 60 else null end
+  ),
+  totalRequests: length
+}) | sort_by(-.totalRequests)'
+```
+
+Calculate metrics grouped by both project and environment:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts --expand project --expand environments | \
+jq -s 'map(select(.environments != null and .project != null) | . as $req | .environments[] | {
+  project: $req.project.key,
+  projectName: $req.project.name,
+  env: .key,
+  envName: .name,
+  req: $req
+}) | group_by(.project + "/" + .env) | map({
+  project: .[0].projectName,
+  environment: .[0].envName,
+  key: .[0].project + "/" + .[0].env,
+  avgTimeToApproveHours: (
+    map(.req | select(.reviewStatus == "approved" and .allReviews != null) |
+      ((.allReviews[] | select(.kind == "approve") | .creationDate) - .creationDate)
+    ) |
+    if length > 0 then add / length / 1000 / 60 / 60 else null end
+  ),
+  avgTimeToApplyHours: (
+    map(.req | select(.status == "completed" and .reviewStatus == "approved" and .appliedDate != null and .allReviews != null) |
+      .appliedDate - (.allReviews[] | select(.kind == "approve") | .creationDate)
+    ) |
+    if length > 0 then add / length / 1000 / 60 / 60 else null end
+  ),
+  totalRequests: length
+}) | sort_by(-.totalRequests)'
+```
+
+### Other jq Examples
+
+Count approvals by status:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts | \
+jq -s 'group_by(.reviewStatus) | map({status: .[0].reviewStatus, count: length})'
+```
+
+Find the longest pending approval:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts | \
+jq -s 'map(select(.reviewStatus == "pending")) | max_by((now * 1000) - .creationDate) | {id: ._id, age_hours: ((now * 1000) - .creationDate) / 1000 / 60 / 60}'
+```
+
+List requestors by approval count:
+
+```bash
+deno run --allow-net --allow-env get-all-approval-requests.ts | \
+jq -s 'group_by(.requestorId) | map({requestor: .[0].requestorId, count: length}) | sort_by(-.count)'
+```

@@ -388,23 +388,89 @@ export async function* getAllApprovalRequestsParallel(
     });
 }
 
+function showHelp() {
+    console.log(`
+Get All Approval Requests
+
+Fetches approval requests from LaunchDarkly and outputs them as NDJSON.
+
+USAGE:
+    deno run --allow-net --allow-env get-all-approval-requests.ts [OPTIONS]
+
+ENVIRONMENT VARIABLES:
+    LAUNCHDARKLY_API_KEY    LaunchDarkly API key (required)
+    LD_API_KEY              Alternative API key variable
+    LD_BASE_URL             Custom base URL (default: https://app.launchdarkly.com)
+    LAUNCHDARKLY_BASE_URL   Alternative base URL variable
+
+OPTIONS:
+    --help                  Show this help message
+
+FILTER OPTIONS:
+    --filter-notify-member-id <id>
+        Filter by member ID assigned to approval (can be specified multiple times)
+
+    --filter-requestor-id <id>
+        Filter by requester's member ID
+
+    --filter-resource-id <id>
+        Filter by resource identifier
+
+    --filter-resource-kind <kind>
+        Filter by resource type: flag, segment, or aiConfig
+
+    --filter-review-status <status>
+        Filter by review status: approved, declined, or pending
+        (can be specified multiple times)
+
+    --filter-status <status>
+        Filter by approval status: pending, scheduled, failed, or completed
+        (can be specified multiple times)
+
+OTHER OPTIONS:
+    --expand <field>
+        Include additional details: flag, project, or environments
+        (can be specified multiple times)
+
+    --parallel <num>
+        Number of parallel requests to use for faster fetching
+        (default: sequential)
+
+    --base-url <url>
+        Custom base URL for LaunchDarkly API
+        (default: https://app.launchdarkly.com)
+
+EXAMPLES:
+    # Get all approval requests
+    deno run --allow-net --allow-env get-all-approval-requests.ts
+
+    # Filter by review status
+    deno run --allow-net --allow-env get-all-approval-requests.ts \\
+      --filter-review-status approved
+
+    # Use parallel fetching for faster downloads
+    deno run --allow-net --allow-env get-all-approval-requests.ts \\
+      --parallel 10
+
+    # Combine filters and expansion
+    deno run --allow-net --allow-env get-all-approval-requests.ts \\
+      --filter-resource-kind flag \\
+      --filter-review-status pending \\
+      --expand flag --expand project
+
+    # Calculate metrics with jq
+    deno run --allow-net --allow-env get-all-approval-requests.ts | \\
+      jq -s 'group_by(.reviewStatus) | map({status: .[0].reviewStatus, count: length})'
+
+For more examples and jq recipes, see the README.md file.
+`);
+}
+
 // Main execution
 if (import.meta.main) {
-    const API_KEY = Deno.env.get("LAUNCHDARKLY_API_KEY") || Deno.env.get("LD_API_KEY");
-    if (!API_KEY) {
-        console.error(
-            "Error: LAUNCHDARKLY_API_KEY or LD_API_KEY environment variable is required",
-        );
-        Deno.exit(1);
-    }
-
-    // Get base URL from environment variable or default
-    let baseUrl = Deno.env.get("LD_BASE_URL") ||
-                  Deno.env.get("LAUNCHDARKLY_BASE_URL") ||
-                  "https://app.launchdarkly.com";
-
-    // Parse command line arguments
+    // Parse command line arguments first to check for --help
     const flags = parseArgs(Deno.args, {
+        boolean: ["help"],
         string: [
             "filter-notify-member-id",
             "filter-requestor-id",
@@ -424,6 +490,26 @@ if (import.meta.main) {
         ],
         default: {},
     });
+
+    // Show help if requested
+    if (flags.help) {
+        showHelp();
+        Deno.exit(0);
+    }
+
+    const API_KEY = Deno.env.get("LAUNCHDARKLY_API_KEY") || Deno.env.get("LD_API_KEY");
+    if (!API_KEY) {
+        console.error(
+            "Error: LAUNCHDARKLY_API_KEY or LD_API_KEY environment variable is required",
+        );
+        console.error("Run with --help for usage information");
+        Deno.exit(1);
+    }
+
+    // Get base URL from environment variable or default
+    let baseUrl = Deno.env.get("LD_BASE_URL") ||
+                  Deno.env.get("LAUNCHDARKLY_BASE_URL") ||
+                  "https://app.launchdarkly.com";
 
     // Build filter options
     const filter: FilterOptions = {};
