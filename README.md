@@ -7,6 +7,7 @@ Standalone scripts and utilities for LaunchDarkly.
 
 ### Analysis & Reporting
 - [chronicle](./scripts/chronicle/README.md): Generate a Spotify Wrapped-style yearly report from LaunchDarkly audit logs with personal statistics, collaboration insights, achievements, and team rankings. Supports both JSON and interactive HTML output.
+- [cleanup-report](./scripts/cleanup-report/README.md): Generate comprehensive reports of live feature flags with metadata, targeting information, code references, and variations served. Ideal for identifying flags ready for cleanup and archival. Outputs JSONL for easy filtering and CSV export for developer outreach.
 - [fallback-report](./scripts/fallback-report/README.md): Analyze feature flag fallback values to detect stale or incorrect configurations. Identifies flags with missing or mismatched fallback values and categorizes issues by severity.
 
 ### Data Export
