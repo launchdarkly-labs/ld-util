@@ -25,13 +25,21 @@ export async function* getAllApprovalRequests(
         filter?: FilterOptions;
         expand?: Array<"flag" | "project" | "environments">;
         baseUrl?: string;
+        max?: number;
+        offset?: number;
     },
 ): AsyncGenerator<Record<string, unknown>> {
     const baseUrl = options?.baseUrl || "https://app.launchdarkly.com";
     let nextUrl: URL | null = new URL("/api/v2/approval-requests", baseUrl);
+    let yieldedCount = 0;
+
+    // Determine optimal limit based on max
+    const limit = options?.max ? Math.min(options.max, 200) : 20;
+    const initialOffset = options?.offset || 0;
 
     // Set up initial query parameters
-    nextUrl.searchParams.set("limit", "20");
+    nextUrl.searchParams.set("limit", limit.toString());
+    nextUrl.searchParams.set("offset", initialOffset.toString());
 
     // Build filter parameter
     if (options?.filter) {
@@ -107,10 +115,42 @@ export async function* getAllApprovalRequests(
             // Yield each approval request
             for (const entry of data.items) {
                 yield entry;
+                yieldedCount++;
+
+                // Stop if we've reached max
+                if (options?.max && yieldedCount >= options.max) {
+                    return;
+                }
             }
 
-            // Get next page URL if it exists
-            nextUrl = data._links?.next?.href ? new URL(data._links.next.href, baseUrl) : null;
+            // Build next URL using offset-based pagination
+            if (data.items.length > 0 && data.totalCount) {
+                const currentOffset = parseInt(url.searchParams.get("offset") || "0");
+                const currentLimit = parseInt(url.searchParams.get("limit") || "20");
+                const newOffset = currentOffset + data.items.length;
+
+                // Check if we need to fetch more
+                const hasMore = newOffset < data.totalCount;
+                const needsMore = !options?.max || yieldedCount < options.max;
+
+                if (hasMore && needsMore) {
+                    nextUrl = new URL(url);
+                    nextUrl.searchParams.set("offset", newOffset.toString());
+
+                    // Adjust limit for the next request if max is set
+                    if (options?.max) {
+                        const remaining = options.max - yieldedCount;
+                        const nextLimit = Math.min(remaining, 200);
+                        nextUrl.searchParams.set("limit", nextLimit.toString());
+                    } else {
+                        nextUrl.searchParams.set("limit", currentLimit.toString());
+                    }
+                } else {
+                    nextUrl = null;
+                }
+            } else {
+                nextUrl = null;
+            }
         } catch (error) {
             if (error instanceof TypeError && error.message.includes("fetch")) {
                 // Network error, retry after a delay
@@ -150,6 +190,8 @@ export async function* getAllApprovalRequestsParallel(
         parallelChunks: number;
         onProgress?: ProgressCallback;
         baseUrl?: string;
+        max?: number;
+        offset?: number;
     },
 ): AsyncGenerator<Record<string, unknown>> {
     const baseUrl = options.baseUrl || "https://app.launchdarkly.com";
@@ -201,9 +243,18 @@ export async function* getAllApprovalRequestsParallel(
     }
 
     const countData: APIResponse = await countResponse.json();
-    const totalCount = countData.totalCount || 0;
+    let totalCount = countData.totalCount || 0;
 
-    if (totalCount === 0) {
+    // Apply starting offset and max limit
+    const startingOffset = options.offset || 0;
+
+    // If max is provided, limit the total records to fetch
+    // Otherwise, fetch all records from totalCount
+    const recordsToFetch = options.max
+        ? Math.min(options.max, totalCount - startingOffset)
+        : totalCount - startingOffset;
+
+    if (recordsToFetch <= 0) {
         options.onProgress?.({
             type: "complete",
             totalChunks: 0,
@@ -215,15 +266,24 @@ export async function* getAllApprovalRequestsParallel(
         return;
     }
 
-    // Calculate chunk size and create offset chunks
-    const chunkSize = Math.ceil(totalCount / options.parallelChunks);
-    const chunks: Array<{ offset: number; limit: number }> = [];
+    // Optimize: if we can fetch all records in one or a few requests, reduce parallelChunks
+    // API supports up to 200 records per request
+    const maxRecordsPerRequest = 200;
+    const minRequestsNeeded = Math.ceil(recordsToFetch / maxRecordsPerRequest);
+    const effectiveParallelChunks = Math.min(options.parallelChunks, minRequestsNeeded);
 
-    for (let i = 0; i < options.parallelChunks; i++) {
-        const offset = i * chunkSize;
-        if (offset >= totalCount) break;
-        const limit = Math.min(chunkSize, totalCount - offset);
-        chunks.push({ offset, limit });
+    // Calculate offset ranges for each worker
+    const chunkSize = Math.ceil(recordsToFetch / effectiveParallelChunks);
+    const chunks: Array<{ startOffset: number; endOffset: number }> = [];
+
+    for (let i = 0; i < effectiveParallelChunks; i++) {
+        const chunkStartOffset = startingOffset + (i * chunkSize);
+        const chunkEndOffset = Math.min(
+            chunkStartOffset + chunkSize,
+            startingOffset + recordsToFetch
+        );
+        if (chunkStartOffset >= startingOffset + recordsToFetch) break;
+        chunks.push({ startOffset: chunkStartOffset, endOffset: chunkEndOffset });
     }
 
     // Report start
@@ -262,76 +322,93 @@ export async function* getAllApprovalRequestsParallel(
                     totalEntriesFetched,
                 });
 
-                // Fetch this specific chunk using offset/limit
-                const chunkUrl = new URL("/api/v2/approval-requests", baseUrl);
-                chunkUrl.searchParams.set("offset", chunk.offset.toString());
-                chunkUrl.searchParams.set("limit", chunk.limit.toString());
+                // Fetch multiple pages within this worker's range using limit=200
+                let currentOffset = chunk.startOffset;
+                const maxLimit = 200;
+                const targetItemCount = chunk.endOffset - chunk.startOffset;
 
-                // Apply filters and expand
-                if (options?.filter) {
-                    const filters: string[] = [];
-                    const f = options.filter;
+                while (chunkEntries < targetItemCount) {
+                    const remaining = targetItemCount - chunkEntries;
+                    const limit = Math.min(remaining, maxLimit);
 
-                    if (f.notifyMemberIds && f.notifyMemberIds.length > 0) {
-                        filters.push(`notifyMemberIds anyOf [${f.notifyMemberIds.join(",")}]`);
+                    const chunkUrl = new URL("/api/v2/approval-requests", baseUrl);
+                    chunkUrl.searchParams.set("offset", currentOffset.toString());
+                    chunkUrl.searchParams.set("limit", limit.toString());
+
+                    // Apply filters and expand
+                    if (options?.filter) {
+                        const filters: string[] = [];
+                        const f = options.filter;
+
+                        if (f.notifyMemberIds && f.notifyMemberIds.length > 0) {
+                            filters.push(`notifyMemberIds anyOf [${f.notifyMemberIds.join(",")}]`);
+                        }
+                        if (f.requestorId) {
+                            filters.push(`requestorId equals ${f.requestorId}`);
+                        }
+                        if (f.resourceId) {
+                            filters.push(`resourceId equals ${f.resourceId}`);
+                        }
+                        if (f.resourceKind) {
+                            filters.push(`resourceKind equals ${f.resourceKind}`);
+                        }
+                        if (f.reviewStatus && f.reviewStatus.length > 0) {
+                            filters.push(`reviewStatus anyOf [${f.reviewStatus.join(",")}]`);
+                        }
+                        if (f.status && f.status.length > 0) {
+                            filters.push(`status anyOf [${f.status.join(",")}]`);
+                        }
+
+                        if (filters.length > 0) {
+                            chunkUrl.searchParams.set("filter", filters.join(","));
+                        }
                     }
-                    if (f.requestorId) {
-                        filters.push(`requestorId equals ${f.requestorId}`);
-                    }
-                    if (f.resourceId) {
-                        filters.push(`resourceId equals ${f.resourceId}`);
-                    }
-                    if (f.resourceKind) {
-                        filters.push(`resourceKind equals ${f.resourceKind}`);
-                    }
-                    if (f.reviewStatus && f.reviewStatus.length > 0) {
-                        filters.push(`reviewStatus anyOf [${f.reviewStatus.join(",")}]`);
-                    }
-                    if (f.status && f.status.length > 0) {
-                        filters.push(`status anyOf [${f.status.join(",")}]`);
+
+                    if (options?.expand && options.expand.length > 0) {
+                        chunkUrl.searchParams.set("expand", options.expand.join(","));
                     }
 
-                    if (filters.length > 0) {
-                        chunkUrl.searchParams.set("filter", filters.join(","));
+                    const response = await fetch(chunkUrl, {
+                        headers: {
+                            "Authorization": apiKey,
+                            "Content-Type": "application/json",
+                        },
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(
+                            `API request failed: ${response.status} ${response.statusText}`,
+                        );
                     }
-                }
 
-                if (options?.expand && options.expand.length > 0) {
-                    chunkUrl.searchParams.set("expand", options.expand.join(","));
-                }
+                    const data: APIResponse = await response.json();
 
-                const response = await fetch(chunkUrl, {
-                    headers: {
-                        "Authorization": apiKey,
-                        "Content-Type": "application/json",
-                    },
-                });
+                    for (const entry of data.items) {
+                        queue.push(entry);
+                        chunkEntries++;
 
-                if (!response.ok) {
-                    throw new Error(
-                        `API request failed: ${response.status} ${response.statusText}`,
-                    );
-                }
+                        // Report progress every N entries
+                        if (chunkEntries - lastReportedCount >= reportInterval) {
+                            lastReportedCount = chunkEntries;
+                            const percentage = Math.round((completedChunks / chunks.length) * 100);
+                            options.onProgress?.({
+                                type: "fetching",
+                                totalChunks: chunks.length,
+                                completedChunks,
+                                percentage,
+                                chunkIndex: index,
+                                entriesCount: chunkEntries,
+                                totalEntriesFetched,
+                            });
+                        }
+                    }
 
-                const data: APIResponse = await response.json();
+                    // Move to next page within this worker's range
+                    currentOffset += data.items.length;
 
-                for (const entry of data.items) {
-                    queue.push(entry);
-                    chunkEntries++;
-
-                    // Report progress every N entries
-                    if (chunkEntries - lastReportedCount >= reportInterval) {
-                        lastReportedCount = chunkEntries;
-                        const percentage = Math.round((completedChunks / chunks.length) * 100);
-                        options.onProgress?.({
-                            type: "fetching",
-                            totalChunks: chunks.length,
-                            completedChunks,
-                            percentage,
-                            chunkIndex: index,
-                            entriesCount: chunkEntries,
-                            totalEntriesFetched,
-                        });
+                    // Stop if we got no items
+                    if (data.items.length === 0) {
+                        break;
                     }
                 }
 
@@ -440,6 +517,14 @@ OTHER OPTIONS:
         Custom base URL for LaunchDarkly API
         (default: https://app.launchdarkly.com)
 
+    --max <number>
+        Maximum number of approval requests to fetch
+        (default: fetch all)
+
+    --offset <number>
+        Starting offset for pagination
+        (default: 0)
+
 EXAMPLES:
     # Get all approval requests
     deno run --allow-net --allow-env get-all-approval-requests.ts
@@ -481,6 +566,8 @@ if (import.meta.main) {
             "expand",
             "parallel",
             "base-url",
+            "max",
+            "offset",
         ],
         collect: [
             "filter-notify-member-id",
@@ -571,6 +658,26 @@ if (import.meta.main) {
         }
     }
 
+    // Parse max option
+    let maxRecords: number | undefined;
+    if (flags.max) {
+        maxRecords = parseInt(flags.max as string);
+        if (isNaN(maxRecords) || maxRecords < 1) {
+            console.error(`Error: --max must be a positive integer`);
+            Deno.exit(1);
+        }
+    }
+
+    // Parse offset option
+    let startOffset: number | undefined;
+    if (flags.offset) {
+        startOffset = parseInt(flags.offset as string);
+        if (isNaN(startOffset) || startOffset < 0) {
+            console.error(`Error: --offset must be a non-negative integer`);
+            Deno.exit(1);
+        }
+    }
+
     // Parse base URL
     if (flags["base-url"]) {
         baseUrl = flags["base-url"] as string;
@@ -584,37 +691,75 @@ if (import.meta.main) {
         filter: Object.keys(filter).length > 0 ? filter : undefined,
         expand: expand.length > 0 ? expand : undefined,
         baseUrl,
+        max: maxRecords,
+        offset: startOffset,
     };
 
     try {
         if (parallelChunks) {
+            // Check if stderr is a TTY (terminal) for progress bar
+            const isTTY = Deno.stderr.isTerminal();
+
             // Use parallel fetching with progress logging to stderr (streaming)
             for await (
                 const entry of getAllApprovalRequestsParallel(API_KEY, {
                     ...options,
                     parallelChunks,
                     onProgress: (progress) => {
-                        switch (progress.type) {
-                            case "start":
-                                console.error(
-                                    `Fetching approval requests in ${progress.totalChunks} parallel chunks...`,
-                                );
-                                break;
-                            case "fetching":
-                                console.error(
-                                    `[${progress.percentage}%] Retrieved ${progress.totalEntriesFetched?.toLocaleString()} entries...`,
-                                );
-                                break;
-                            case "chunk_complete":
-                                console.error(
-                                    `[${progress.percentage}%] Retrieved ${progress.totalEntriesFetched?.toLocaleString()} entries (${progress.completedChunks}/${progress.totalChunks} requests complete)`,
-                                );
-                                break;
-                            case "complete":
-                                console.error(
-                                    `[100%] Complete: ${progress.uniqueEntries?.toLocaleString()} entries retrieved`,
-                                );
-                                break;
+                        if (isTTY) {
+                            // Use carriage return to update the same line
+                            // Clear line with spaces to handle varying message lengths
+                            const clearLine = "\r\x1b[K"; // Carriage return + clear to end of line
+
+                            switch (progress.type) {
+                                case "start":
+                                    Deno.stderr.writeSync(
+                                        new TextEncoder().encode(
+                                            `Fetching approval requests in ${progress.totalChunks} parallel chunks...\n`
+                                        )
+                                    );
+                                    break;
+                                case "fetching":
+                                    Deno.stderr.writeSync(
+                                        new TextEncoder().encode(
+                                            `${clearLine}[${progress.percentage}%] Retrieved ${progress.totalEntriesFetched?.toLocaleString()} entries...`
+                                        )
+                                    );
+                                    break;
+                                case "chunk_complete":
+                                    Deno.stderr.writeSync(
+                                        new TextEncoder().encode(
+                                            `${clearLine}[${progress.percentage}%] Retrieved ${progress.totalEntriesFetched?.toLocaleString()} entries (${progress.completedChunks}/${progress.totalChunks} requests complete)`
+                                        )
+                                    );
+                                    break;
+                                case "complete":
+                                    Deno.stderr.writeSync(
+                                        new TextEncoder().encode(
+                                            `${clearLine}[100%] Complete: ${progress.uniqueEntries?.toLocaleString()} entries retrieved\n`
+                                        )
+                                    );
+                                    break;
+                            }
+                        } else {
+                            // Non-TTY: only show chunk_complete and complete messages
+                            switch (progress.type) {
+                                case "start":
+                                    console.error(
+                                        `Fetching approval requests in ${progress.totalChunks} parallel chunks...`,
+                                    );
+                                    break;
+                                case "chunk_complete":
+                                    console.error(
+                                        `[${progress.percentage}%] Retrieved ${progress.totalEntriesFetched?.toLocaleString()} entries (${progress.completedChunks}/${progress.totalChunks} requests complete)`,
+                                    );
+                                    break;
+                                case "complete":
+                                    console.error(
+                                        `[100%] Complete: ${progress.uniqueEntries?.toLocaleString()} entries retrieved`,
+                                    );
+                                    break;
+                            }
                         }
                     },
                 })
