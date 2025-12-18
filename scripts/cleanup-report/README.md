@@ -228,7 +228,7 @@ Find flags ready for cleanup, sorted by priority:
 ./cleanup-report.ts my-project production | \
 jq -sc '
   map(select(
-    ((.variations_served | length) == 1) and
+    ((.variations_served | length) == 1) or
     ((.stale.readyForCodeRemoval == true) or (.stale.readyToArchive == true))
   ))
   | sort_by([
@@ -258,7 +258,7 @@ Generate a CSV for contacting developers about cleaning up their old flags:
 jq -rsc '
   # Filter and sort like before
   map(select(
-    ((.variations_served | length) == 1) and
+    ((.variations_served | length) == 1) or
     ((.stale.readyForCodeRemoval == true) or (.stale.readyToArchive == true))
   ))
   | sort_by([
