@@ -103,6 +103,8 @@ interface Flag {
 
 interface FlagStatus {
     default?: unknown;
+    name?: string;
+    lastRequested?: number;
     _links: {
         parent: {
             href: string;
@@ -173,6 +175,8 @@ interface CleanupReportOutput {
     };
     environment: string;
     lastModified?: number;
+    lastRequested?: number;
+    status?: string;
     variations_served: number[];
     fallback_value?: unknown;
     variations: Array<{
@@ -457,6 +461,8 @@ async function generateCleanupReport(
             codeReferences: flag.codeReferences,
             environment: environmentKey,
             lastModified: env?.lastModified,
+            lastRequested: status?.lastRequested,
+            status: status?.name,
             variations_served: variationsServed,
             fallback_value: status?.default,
             variations: flag.variations,

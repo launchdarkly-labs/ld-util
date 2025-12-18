@@ -5,9 +5,10 @@ Generate a comprehensive report of all live feature flags in a LaunchDarkly proj
 ## Features
 
 - Fetches all live flags from a specified project and environment
+- Fetches flag statuses for lifecycle and usage information
 - Includes complete flag metadata (maintainer, tags, custom properties, etc.)
 - Analyzes which variations are actually being served in the environment
-- Reports fallback values from flag status
+- Reports flag status information (lifecycle status, last requested time, fallback values)
 - Outputs data in JSONL (JSON Lines) format for easy processing
 - Supports custom LaunchDarkly base URIs (for different regions or instances)
 - Includes rate limiting and retry logic for robust API access
@@ -116,6 +117,8 @@ The script outputs one JSON object per line (JSONL format). Each line represents
 | `codeReferences` | object | Code references information including repository details, file counts, and latest commit times |
 | `environment` | string | The environment key (from input) |
 | `lastModified` | number | Unix timestamp (milliseconds) of when the flag's targeting rules were last modified in this environment |
+| `lastRequested` | number | Unix timestamp (milliseconds) of when the flag was last requested (from flag status) |
+| `status` | string | Flag lifecycle status: "new", "active", "inactive", or "launched" (from flag status) |
 | `variations_served` | number[] | Array of unique variation indices currently being served in the environment (from targets, context targets, rules, and fallthrough) |
 | `fallback_value` | any | The default/fallback value from flag status |
 | `variations` | object[] | Array of all flag variations with their values, names, and descriptions |
@@ -124,7 +127,7 @@ The script outputs one JSON object per line (JSONL format). Each line represents
 ### Example Output
 
 ```jsonl
-{"key":"my-feature","name":"My Feature Flag","tags":["frontend","temporary"],"temporary":true,"creationDate":1702345678901,"clientSideAvailability":{"usingMobileKey":true,"usingEnvironmentId":false},"_maintainer":{"email":"user@example.com","firstName":"Jane","lastName":"Doe"},"_maintainerTeam":{"key":"platform","name":"Platform Team"},"stale":{"cleanupId":null,"readyForCodeRemoval":false,"readyToArchive":false},"customProperties":{"jira":"PROJ-123"},"description":"Controls the new dashboard UI","environment":"production","lastModified":1702456789012,"variations_served":[0,1],"fallback_value":false,"variations":[{"value":false,"name":"Off"},{"value":true,"name":"On"}],"_summary":{"variations":{"0":{"rules":1,"targets":0},"1":{"isFallthrough":true}}}}
+{"key":"my-feature","name":"My Feature Flag","tags":["frontend","temporary"],"temporary":true,"creationDate":1702345678901,"clientSideAvailability":{"usingMobileKey":true,"usingEnvironmentId":false},"_maintainer":{"email":"user@example.com","firstName":"Jane","lastName":"Doe"},"_maintainerTeam":{"key":"platform","name":"Platform Team"},"stale":{"cleanupId":null,"readyForCodeRemoval":false,"readyToArchive":false},"customProperties":{"jira":"PROJ-123"},"description":"Controls the new dashboard UI","environment":"production","lastModified":1702456789012,"lastRequested":1702567890123,"status":"active","variations_served":[0,1],"fallback_value":false,"variations":[{"value":false,"name":"Off"},{"value":true,"name":"On"}],"_summary":{"variations":{"0":{"rules":1,"targets":0},"1":{"isFallthrough":true}}}}
 ```
 
 ### Pretty-Printed Example
@@ -187,6 +190,8 @@ The script outputs one JSON object per line (JSONL format). Each line represents
   },
   "environment": "production",
   "lastModified": 1702456789012,
+  "lastRequested": 1702567890123,
+  "status": "active",
   "variations_served": [0, 1],
   "fallback_value": false,
   "variations": [
