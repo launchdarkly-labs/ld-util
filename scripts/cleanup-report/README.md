@@ -17,9 +17,9 @@ Generate a comprehensive report of all live feature flags in a LaunchDarkly proj
 ### Basic Usage
 
 ```bash
-export LD_API_KEY="your-api-key-here"
+export LAUNCHDARKLY_API_KEY="your-api-key-here"
 # or
-export LD_APIKEY="your-api-key-here"
+export LD_API_KEY="your-api-key-here"
 
 ./cleanup-report.ts <project-key> <environment-key>
 ```
@@ -27,7 +27,7 @@ export LD_APIKEY="your-api-key-here"
 ### With Custom Base URI
 
 ```bash
-export LD_API_KEY="your-api-key-here"
+export LAUNCHDARKLY_API_KEY="your-api-key-here"
 export LAUNCHDARKLY_BASE_URI="https://app.launchdarkly.eu/"
 ./cleanup-report.ts <project-key> <environment-key>
 ```
@@ -35,7 +35,7 @@ export LAUNCHDARKLY_BASE_URI="https://app.launchdarkly.eu/"
 Or pass the base URI as a command-line argument:
 
 ```bash
-export LD_API_KEY="your-api-key-here"
+export LAUNCHDARKLY_API_KEY="your-api-key-here"
 ./cleanup-report.ts <project-key> <environment-key> https://app.launchdarkly.eu/
 ```
 
@@ -51,8 +51,8 @@ export LD_API_KEY="your-api-key-here"
 # Count total flags
 ./cleanup-report.ts my-project production | wc -l
 
-# Filter stale flags
-./cleanup-report.ts my-project production | jq -c 'select(.stale == true)'
+# Filter flags ready to archive
+./cleanup-report.ts my-project production | jq -c 'select(.stale.readyToArchive == true)'
 
 # Get flags with specific tags
 ./cleanup-report.ts my-project production | jq -c 'select(.tags | index("temporary"))'
@@ -65,13 +65,13 @@ export LD_API_KEY="your-api-key-here"
 
 This script requires:
 - `--allow-net`: To make HTTPS requests to the LaunchDarkly API
-- `--allow-env`: To read the `LD_API_KEY` and `LAUNCHDARKLY_BASE_URI` environment variables
+- `--allow-env`: To read the `LAUNCHDARKLY_API_KEY` (or `LD_API_KEY`) and `LAUNCHDARKLY_BASE_URI` environment variables
 
 ## Environment Variables
 
 ### Required
 
-- `LD_API_KEY` or `LD_APIKEY`: Your LaunchDarkly API access token with read permissions for flags and flag statuses (the script checks both variants)
+- `LAUNCHDARKLY_API_KEY` or `LD_API_KEY`: Your LaunchDarkly API access token with read permissions for flags and flag statuses (the script checks `LAUNCHDARKLY_API_KEY` first, then falls back to `LD_API_KEY`)
 
 ### Optional
 
@@ -110,7 +110,7 @@ The script outputs one JSON object per line (JSONL format). Each line represents
 | `clientSideAvailability` | object | Client-side SDK availability settings |
 | `_maintainer` | object | Information about the flag's maintainer (user) |
 | `_maintainerTeam` | object | Information about the flag's maintainer team |
-| `stale` | boolean | Whether the flag is marked as stale |
+| `stale` | object | Stale flag information with `cleanupId`, `readyForCodeRemoval`, and `readyToArchive` properties |
 | `customProperties` | object | Custom properties defined for the flag |
 | `description` | string | Flag description |
 | `codeReferences` | object | Code references information including repository details, file counts, and latest commit times |
@@ -124,7 +124,7 @@ The script outputs one JSON object per line (JSONL format). Each line represents
 ### Example Output
 
 ```jsonl
-{"key":"my-feature","name":"My Feature Flag","tags":["frontend","temporary"],"temporary":true,"creationDate":1702345678901,"clientSideAvailability":{"usingMobileKey":true,"usingEnvironmentId":false},"_maintainer":{"email":"user@example.com","firstName":"Jane","lastName":"Doe"},"_maintainerTeam":{"key":"platform","name":"Platform Team"},"stale":false,"customProperties":{"jira":"PROJ-123"},"description":"Controls the new dashboard UI","environment":"production","lastModified":1702456789012,"variations_served":[0,1],"fallback_value":false,"variations":[{"value":false,"name":"Off"},{"value":true,"name":"On"}],"_summary":{"variations":{"0":{"rules":1,"targets":0},"1":{"isFallthrough":true}}}}
+{"key":"my-feature","name":"My Feature Flag","tags":["frontend","temporary"],"temporary":true,"creationDate":1702345678901,"clientSideAvailability":{"usingMobileKey":true,"usingEnvironmentId":false},"_maintainer":{"email":"user@example.com","firstName":"Jane","lastName":"Doe"},"_maintainerTeam":{"key":"platform","name":"Platform Team"},"stale":{"cleanupId":null,"readyForCodeRemoval":false,"readyToArchive":false},"customProperties":{"jira":"PROJ-123"},"description":"Controls the new dashboard UI","environment":"production","lastModified":1702456789012,"variations_served":[0,1],"fallback_value":false,"variations":[{"value":false,"name":"Off"},{"value":true,"name":"On"}],"_summary":{"variations":{"0":{"rules":1,"targets":0},"1":{"isFallthrough":true}}}}
 ```
 
 ### Pretty-Printed Example
@@ -149,7 +149,11 @@ The script outputs one JSON object per line (JSONL format). Each line represents
     "key": "platform",
     "name": "Platform Team"
   },
-  "stale": false,
+  "stale": {
+    "cleanupId": null,
+    "readyForCodeRemoval": false,
+    "readyToArchive": false
+  },
   "customProperties": {
     "jira": "PROJ-123"
   },
@@ -381,6 +385,6 @@ If the script encounters an unrecoverable error, it will:
 
 - The script only fetches **live** (non-archived) flags by default
 - All dates are returned as Unix timestamps in milliseconds
-- The output is sorted by most recently modified targeting rules first
+- Flags are returned in the order provided by the API (not sorted by default)
 - Rate limiting is automatically handled with exponential backoff
 - Each flag is output as a complete JSON object on a single line (JSONL format)

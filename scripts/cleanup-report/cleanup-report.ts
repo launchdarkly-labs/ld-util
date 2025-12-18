@@ -470,9 +470,9 @@ async function generateCleanupReport(
 
 // Main execution
 if (import.meta.main) {
-    const API_KEY = Deno.env.get("LD_API_KEY") || Deno.env.get("LD_APIKEY");
+    const API_KEY = Deno.env.get("LAUNCHDARKLY_API_KEY") || Deno.env.get("LD_API_KEY");
     if (!API_KEY) {
-        console.error("Error: LD_API_KEY or LD_APIKEY environment variable is required");
+        console.error("Error: LAUNCHDARKLY_API_KEY or LD_API_KEY environment variable is required");
         Deno.exit(1);
     }
 
