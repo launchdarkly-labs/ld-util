@@ -7,7 +7,7 @@ import { parseArgs } from "jsr:@std/cli/parse-args";
 
 // --- Noise field configuration ---
 // Fields stripped recursively at any depth.
-const RECURSIVE_NOISE = new Set(["_id"]);
+const RECURSIVE_NOISE = new Set(["_id", "id"]);
 
 // Top-level fields stripped from each flag entry in the polling payload.
 // These are version/instance-specific and create noise when comparing.
