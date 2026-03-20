@@ -7,6 +7,14 @@ interface APIResponse {
     };
 }
 
+export interface StatementPost {
+    effect: "allow" | "deny";
+    resources?: string[];
+    notResources?: string[];
+    actions?: string[];
+    notActions?: string[];
+}
+
 /**
  * Convert ISO 8601 string or unix timestamp to milliseconds
  */
@@ -29,6 +37,71 @@ function toMilliseconds(value: string | number): number {
     return date.getTime();
 }
 
+class Semaphore {
+    private permits: number;
+    private queue: Array<() => void> = [];
+
+    constructor(permits: number) {
+        this.permits = permits;
+    }
+
+    async acquire(): Promise<void> {
+        if (this.permits > 0) {
+            this.permits--;
+            return;
+        }
+        return new Promise((resolve) => this.queue.push(resolve));
+    }
+
+    release(): void {
+        if (this.queue.length > 0) {
+            this.queue.shift()!();
+        } else {
+            this.permits++;
+        }
+    }
+}
+
+async function fetchFullEntry(
+    apiKey: string,
+    id: string,
+    baseUrl: string,
+): Promise<Record<string, unknown>> {
+    const url = new URL(`/api/v2/auditlog/${id}`, baseUrl);
+    while (true) {
+        try {
+            const response = await fetch(url, {
+                headers: {
+                    "Authorization": apiKey,
+                    "Content-Type": "application/json",
+                },
+            });
+            if (response.status === 429) {
+                const resetTime = response.headers.get("X-RateLimit-Reset");
+                const waitMs = resetTime
+                    ? Math.min((parseInt(resetTime) * 1000) - Date.now(), 1000)
+                    : 1000;
+                await new Promise((resolve) => setTimeout(resolve, waitMs));
+                continue;
+            }
+            if (!response.ok) {
+                if (response.status >= 500) {
+                    await new Promise((resolve) => setTimeout(resolve, 1000));
+                    continue;
+                }
+                throw new Error(`API request failed: ${response.status} ${response.statusText}`);
+            }
+            return await response.json();
+        } catch (error) {
+            if (error instanceof TypeError && error.message.includes("fetch")) {
+                await new Promise((resolve) => setTimeout(resolve, 1000));
+                continue;
+            }
+            throw error;
+        }
+    }
+}
+
 export async function* getAllAuditLogEntries(
     apiKey: string,
     options?: {
@@ -36,7 +109,10 @@ export async function* getAllAuditLogEntries(
         after?: string | number;
         query?: string;
         spec?: string;
+        policy?: StatementPost[];
         baseUrl?: string;
+        full?: boolean;
+        fullSemaphore?: Semaphore;
     },
 ): AsyncGenerator<Record<string, unknown>> {
     const baseUrl = options?.baseUrl || "https://app.launchdarkly.com";
@@ -64,12 +140,18 @@ export async function* getAllAuditLogEntries(
     while (nextUrl) {
         const url = new URL(nextUrl, baseUrl);
         try {
-            const response = await fetch(url, {
+            const usePost = options?.policy && options.policy.length > 0;
+            const fetchOptions: RequestInit = {
+                method: usePost ? "POST" : "GET",
                 headers: {
                     "Authorization": apiKey,
                     "Content-Type": "application/json",
                 },
-            });
+            };
+            if (usePost) {
+                fetchOptions.body = JSON.stringify(options!.policy);
+            }
+            const response = await fetch(url, fetchOptions);
 
             if (response.status === 429) {
                 // Handle rate limiting
@@ -99,8 +181,26 @@ export async function* getAllAuditLogEntries(
             const data: APIResponse = await response.json();
 
             // Yield each audit log entry
-            for (const entry of data.items) {
-                yield entry;
+            if (options?.full && options.fullSemaphore) {
+                // Fetch full entries for this page in parallel, bounded by shared semaphore
+                const sem = options.fullSemaphore;
+                const fullEntries = await Promise.all(
+                    data.items.map(async (entry) => {
+                        await sem.acquire();
+                        try {
+                            return await fetchFullEntry(apiKey, entry._id as string, baseUrl);
+                        } finally {
+                            sem.release();
+                        }
+                    }),
+                );
+                for (const fullEntry of fullEntries) yield fullEntry;
+            } else if (options?.full) {
+                for (const entry of data.items) {
+                    yield await fetchFullEntry(apiKey, entry._id as string, baseUrl);
+                }
+            } else {
+                for (const entry of data.items) yield entry;
             }
 
             // Get next page URL if it exists
@@ -144,9 +244,11 @@ export async function* getAllAuditLogEntriesParallel(
         after?: string | number;
         query?: string;
         spec?: string;
+        policy?: StatementPost[];
         parallelChunks: number;
         onProgress?: ProgressCallback;
         baseUrl?: string;
+        full?: boolean;
     },
 ): AsyncGenerator<Record<string, unknown>> {
     // Calculate time range
@@ -177,6 +279,9 @@ export async function* getAllAuditLogEntriesParallel(
             before: new Date(before).toISOString(),
         },
     });
+
+    // Shared semaphore for full entry fetches across all chunks
+    const fullSemaphore = options.full ? new Semaphore(options.parallelChunks) : undefined;
 
     // Track seen entry IDs to avoid duplicates
     const seenIds = new Set<string>();
@@ -214,9 +319,12 @@ export async function* getAllAuditLogEntriesParallel(
                     const entry of getAllAuditLogEntries(apiKey, {
                         query: options.query,
                         spec: options.spec,
+                        policy: options.policy,
                         after: chunk.after,
                         before: chunk.before,
                         baseUrl: options.baseUrl,
+                        full: options.full,
+                        fullSemaphore,
                     })
                 ) {
                     queue.push(entry);
@@ -312,10 +420,13 @@ if (import.meta.main) {
         after?: string | number;
         query?: string;
         spec?: string;
+        policy?: StatementPost[];
         baseUrl?: string;
+        full?: boolean;
     } = {};
     let parallelChunks: number | undefined;
     let sorted = false;
+    let full = false;
 
     for (let i = 0; i < Deno.args.length; i++) {
         const arg = Deno.args[i];
@@ -325,6 +436,10 @@ if (import.meta.main) {
             // Handle flags without values
             if (key === "sorted") {
                 sorted = true;
+                continue;
+            }
+            if (key === "full") {
+                full = true;
                 continue;
             }
 
@@ -348,6 +463,15 @@ if (import.meta.main) {
                     break;
                 case "spec":
                     options.spec = value;
+                    break;
+                case "policy":
+                    try {
+                        const parsed = JSON.parse(value);
+                        options.policy = Array.isArray(parsed) ? parsed : [parsed];
+                    } catch {
+                        console.error(`Error: --policy must be valid JSON`);
+                        Deno.exit(1);
+                    }
                     break;
                 case "parallel":
                     parallelChunks = parseInt(value);
@@ -377,8 +501,9 @@ if (import.meta.main) {
         options.after = thirtyDaysAgo;
     }
 
-    // Add baseUrl to options
+    // Add baseUrl and full to options
     options.baseUrl = baseUrl;
+    if (full) options.full = true;
 
     try {
         if (sorted) {
