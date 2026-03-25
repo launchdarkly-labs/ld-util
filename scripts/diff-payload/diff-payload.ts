@@ -4,8 +4,8 @@ import { parseArgs } from "jsr:@std/cli/parse-args";
 import { type DiffFormat, diffPayloads, fetchSDKPayload } from "./mod.ts";
 
 const args = parseArgs(Deno.args, {
-    string: ["base-url", "format"],
-    boolean: ["help", "include-segments"],
+    string: ["base-url", "format", "stream-url"],
+    boolean: ["help", "include-segments", "live"],
     alias: { h: "help", f: "format" },
     default: { format: "console", "include-segments": true },
 });
@@ -26,12 +26,15 @@ Options:
                           console    Human-readable colored text
                           jsonpatch  RFC 6902 ops array — {op, path, value}
                           delta      Raw jsondiffpatch delta — compact
+  --live                 Stream mode — continuously diff via SSE streaming
   --no-include-segments  Exclude segments from the diff
   --base-url            SDK polling base URL (default: https://sdk.launchdarkly.com)
+  --stream-url          SDK streaming base URL (live mode only)
   --help, -h            Show this help message
 
 Environment variables:
   LD_BASE_URL            Alternative to --base-url
+  LD_STREAM_URL          Alternative to --stream-url
 
 Examples:
   diff-payload.ts sdk-xxx-111 sdk-xxx-222
@@ -43,6 +46,15 @@ Examples:
 
 const sdkKeyA = String(args._[0]);
 const sdkKeyB = String(args._[1]);
+const includeSegments = args["include-segments"] as boolean;
+
+if (args.live) {
+    const { startLiveMode } = await import("./live-diff.ts");
+    const streamUrl = args["stream-url"] as string ||
+        Deno.env.get("LD_STREAM_URL");
+    await startLiveMode({ sdkKeyA, sdkKeyB, includeSegments, streamUrl });
+    Deno.exit(0); // unreachable — startLiveMode exits
+}
 
 const format = args.format as string;
 if (format !== "jsonpatch" && format !== "delta" && format !== "console") {
@@ -55,8 +67,6 @@ if (format !== "jsonpatch" && format !== "delta" && format !== "console") {
 const baseUrl = args["base-url"] ||
     Deno.env.get("LD_BASE_URL") ||
     "https://sdk.launchdarkly.com";
-
-const includeSegments = args["include-segments"] as boolean;
 
 // Fetch both payloads in parallel
 console.error("Fetching payload A...");

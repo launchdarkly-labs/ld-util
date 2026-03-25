@@ -22,8 +22,10 @@ diff-payload.ts <sdk-key-a> <sdk-key-b> [options]
 | Option | Description |
 |---|---|
 | `--format, -f` | Output format — see below (default: `console`) |
+| `--live` | Stream mode — continuously diff via SSE streaming |
 | `--no-include-segments` | Exclude segments from the diff |
 | `--base-url` | SDK polling base URL (default: `https://sdk.launchdarkly.com`) |
+| `--stream-url` | SDK streaming base URL (live mode only) |
 | `--help, -h` | Show help |
 
 ### Environment Variables
@@ -31,6 +33,7 @@ diff-payload.ts <sdk-key-a> <sdk-key-b> [options]
 | Variable | Description |
 |---|---|
 | `LD_BASE_URL` | Alternative to `--base-url` |
+| `LD_STREAM_URL` | Alternative to `--stream-url` |
 
 ## Output Formats
 
@@ -56,6 +59,33 @@ RFC 6902 JSON Patch — an array of operations describing what changed. Easy to 
 
 Raw [jsondiffpatch](https://github.com/benjamine/jsondiffpatch) delta format. Compact but requires knowing the delta spec (`[newVal]` = added, `[old, new]` = modified, `[old, 0, 0]` = deleted).
 
+## Live Mode
+
+`--live` connects to LaunchDarkly's streaming API via the Node Server SDK and continuously diffs as flag/segment data changes in real time.
+
+```sh
+diff-payload.ts "$SDK_KEY_STAGING" "$SDK_KEY_PROD" --live
+```
+
+The TUI shows a list of flags and segments that differ between environments, with per-column change counts:
+
+| Column | Flags | Segments |
+|---|---|---|
+| Targets / Members | Individual targeting changes | Included/excluded lists |
+| Rules | Rule clause and serve changes | Segment rule changes |
+| Defaults | Fallthrough and off variation | — |
+| Variations | Variation value changes | — |
+
+### Keybindings
+
+| Key | List view | Detail view |
+|---|---|---|
+| `↑`/`↓` or `j`/`k` | Select flag/segment | Scroll |
+| `Enter` | Drill into selected item | — |
+| `←`/`Esc`/`Backspace` | — | Back to list |
+| `f` | — | Cycle format: ui → console → json-patch → delta |
+| `q` / `Ctrl+C` | Quit | Quit |
+
 ## Examples
 
 ```sh
@@ -70,6 +100,12 @@ diff-payload.ts "$SDK_KEY_STAGING" "$SDK_KEY_PROD" -f console
 
 # Exclude segments
 diff-payload.ts sdk-xxx-111 sdk-xxx-222 --no-include-segments
+
+# Live streaming diff
+diff-payload.ts "$SDK_KEY_STAGING" "$SDK_KEY_PROD" --live
+
+# Live mode with custom streaming endpoint
+diff-payload.ts "$SDK_KEY_A" "$SDK_KEY_B" --live --stream-url https://relay.internal:8030
 
 # Save diff for later
 diff-payload.ts sdk-xxx-111 sdk-xxx-222 -f jsonpatch > diff.json 2>progress.log
